@@ -27,7 +27,7 @@ The core Go application built with GoFiber:
 
 - **HTTP Server**: Handles REST API requests and serves static web UI
 - **JWT Validator**: Validates tokens using JWKS endpoint
-- **OAuth Handler**: Manages authorization code flow
+- **OIDC Handler**: Manages authorization code flow
 - **Kubernetes Client**: Creates/manages ArgoCD Applications
 
 ### ArgoCD

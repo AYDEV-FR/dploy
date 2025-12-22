@@ -12,25 +12,28 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
 	"github.com/AYDEV-FR/dploy/internal/config"
+	"github.com/gofiber/fiber/v2"
 )
 
+// StateData holds OIDC state information for CSRF protection.
 type StateData struct {
 	Expiry    time.Time
 	ReturnURL string
 }
 
-type OAuthHandler struct {
-	config       *config.Config
-	states       map[string]*StateData
-	statesMutex  sync.RWMutex
-	tokenURL     string
-	authURL      string
-	userInfoURL  string
+// OIDCHandler handles OIDC authentication flow.
+type OIDCHandler struct {
+	config      *config.Config
+	states      map[string]*StateData
+	statesMutex sync.RWMutex
+	tokenURL    string
+	authURL     string
+	userInfoURL string
 }
 
-type TokenResponse struct {
+// OIDCTokenResponse represents the token response from the OIDC provider.
+type OIDCTokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	TokenType    string `json:"token_type"`
 	RefreshToken string `json:"refresh_token"`
@@ -38,19 +41,20 @@ type TokenResponse struct {
 	IDToken      string `json:"id_token"`
 }
 
-func NewOAuthHandler(cfg *config.Config) (*OAuthHandler, error) {
-	// Always use manual construction with internal issuer for backend calls
-	// This avoids issues with OIDC discovery returning public URLs
+// NewOIDCHandler creates a new OIDC handler.
+func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
+	// Always use manual construction with internal issuer for backend calls.
+	// This avoids issues with OIDC discovery returning public URLs.
 	tokenURL := fmt.Sprintf("%s/token", cfg.OIDCIssuer)
 	authURL := fmt.Sprintf("%s/auth", cfg.OIDCIssuer)
 	userInfoURL := fmt.Sprintf("%s/userinfo", cfg.OIDCIssuer)
 
-	// If public issuer is different, use it for browser redirects (auth URL)
+	// If public issuer is different, use it for browser redirects (auth URL).
 	if cfg.OIDCPublicIssuer != "" && cfg.OIDCPublicIssuer != cfg.OIDCIssuer {
 		authURL = fmt.Sprintf("%s/auth", cfg.OIDCPublicIssuer)
 	}
 
-	handler := &OAuthHandler{
+	handler := &OIDCHandler{
 		config:      cfg,
 		states:      make(map[string]*StateData),
 		tokenURL:    tokenURL,
@@ -58,13 +62,13 @@ func NewOAuthHandler(cfg *config.Config) (*OAuthHandler, error) {
 		userInfoURL: userInfoURL,
 	}
 
-	// Start cleanup goroutine for expired states
+	// Start cleanup goroutine for expired states.
 	go handler.cleanupStates()
 
 	return handler, nil
 }
 
-func (h *OAuthHandler) cleanupStates() {
+func (h *OIDCHandler) cleanupStates() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
@@ -80,9 +84,12 @@ func (h *OAuthHandler) cleanupStates() {
 	}
 }
 
-func (h *OAuthHandler) generateState(returnURL string) string {
+func (h *OIDCHandler) generateState(returnURL string) string {
 	b := make([]byte, 32)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based state if crypto/rand fails.
+		b = []byte(fmt.Sprintf("%d", time.Now().UnixNano()))
+	}
 	state := base64.URLEncoding.EncodeToString(b)
 
 	h.statesMutex.Lock()
@@ -95,7 +102,7 @@ func (h *OAuthHandler) generateState(returnURL string) string {
 	return state
 }
 
-func (h *OAuthHandler) validateState(state string) (*StateData, bool) {
+func (h *OIDCHandler) validateState(state string) (*StateData, bool) {
 	h.statesMutex.RLock()
 	data, exists := h.states[state]
 	h.statesMutex.RUnlock()
@@ -111,7 +118,7 @@ func (h *OAuthHandler) validateState(state string) (*StateData, bool) {
 		return nil, false
 	}
 
-	// Remove state after validation (one-time use)
+	// Remove state after validation (one-time use).
 	h.statesMutex.Lock()
 	delete(h.states, state)
 	h.statesMutex.Unlock()
@@ -119,9 +126,9 @@ func (h *OAuthHandler) validateState(state string) (*StateData, bool) {
 	return data, true
 }
 
-// Login initiates the OAuth2 flow
-func (h *OAuthHandler) Login(c *fiber.Ctx) error {
-	// Get returnUrl from query parameter (optional)
+// Login initiates the OIDC Authorization Code flow.
+func (h *OIDCHandler) Login(c *fiber.Ctx) error {
+	// Get returnUrl from query parameter (optional).
 	returnURL := c.Query("returnUrl", "/")
 
 	state := h.generateState(returnURL)
@@ -137,8 +144,8 @@ func (h *OAuthHandler) Login(c *fiber.Ctx) error {
 	return c.Redirect(authURL, fiber.StatusFound)
 }
 
-// Callback handles the OAuth2 callback
-func (h *OAuthHandler) Callback(c *fiber.Ctx) error {
+// Callback handles the OIDC callback after user authentication.
+func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 	code := c.Query("code")
 	state := c.Query("state")
 	errorParam := c.Query("error")
@@ -163,7 +170,7 @@ func (h *OAuthHandler) Callback(c *fiber.Ctx) error {
 		})
 	}
 
-	// Exchange code for token
+	// Exchange code for token.
 	token, err := h.exchangeCode(code)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -171,7 +178,7 @@ func (h *OAuthHandler) Callback(c *fiber.Ctx) error {
 		})
 	}
 
-	// Use ID token if available, otherwise access token
+	// Use ID token if available (OIDC), otherwise fall back to access token.
 	tokenToUse := token.IDToken
 	if tokenToUse == "" {
 		tokenToUse = token.AccessToken
@@ -183,27 +190,27 @@ func (h *OAuthHandler) Callback(c *fiber.Ctx) error {
 		})
 	}
 
-	// Get return URL from state (defaults to "/" if not specified)
+	// Get return URL from state (defaults to "/" if not specified).
 	returnURL := "/"
 	if stateData != nil && stateData.ReturnURL != "" {
 		returnURL = stateData.ReturnURL
 	}
 
-	// Redirect with token in hash fragment (client-side only, not sent to server)
-	// This is more secure than query params and prevents token leakage in server logs
+	// Redirect with token in hash fragment (client-side only, not sent to server).
+	// This is more secure than query params and prevents token leakage in server logs.
 	redirectURL := fmt.Sprintf("%s#token=%s", returnURL, tokenToUse)
 
-	fmt.Printf("OAuth callback: redirecting to %s with token in hash (length: %d)\n", returnURL, len(tokenToUse))
+	fmt.Printf("OIDC callback: redirecting to %s with token in hash (length: %d)\n", returnURL, len(tokenToUse))
 
 	return c.Redirect(redirectURL, fiber.StatusFound)
 }
 
-// Logout redirects to home (token is cleared client-side)
-func (h *OAuthHandler) Logout(c *fiber.Ctx) error {
+// Logout redirects to home (token is cleared client-side).
+func (h *OIDCHandler) Logout(c *fiber.Ctx) error {
 	return c.Redirect("/", fiber.StatusFound)
 }
 
-func (h *OAuthHandler) exchangeCode(code string) (*TokenResponse, error) {
+func (h *OIDCHandler) exchangeCode(code string) (*OIDCTokenResponse, error) {
 	data := url.Values{}
 	data.Set("grant_type", "authorization_code")
 	data.Set("code", code)
@@ -230,13 +237,15 @@ func (h *OAuthHandler) exchangeCode(code string) (*TokenResponse, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Try to read error details
+		// Try to read error details.
 		var errorBody map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&errorBody)
+		if err := json.NewDecoder(resp.Body).Decode(&errorBody); err != nil {
+			return nil, fmt.Errorf("token endpoint returned status %d", resp.StatusCode)
+		}
 		return nil, fmt.Errorf("token endpoint returned status %d: %v", resp.StatusCode, errorBody)
 	}
 
-	var tokenResp TokenResponse
+	var tokenResp OIDCTokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
 		return nil, fmt.Errorf("failed to decode token response: %w", err)
 	}

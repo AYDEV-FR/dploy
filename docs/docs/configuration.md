@@ -22,15 +22,15 @@ Dploy is configured through environment variables and a YAML file for environmen
 | `JWT_AUDIENCE` | `dploy` | Expected JWT audience claim |
 | `JWT_USERNAME_CLAIM` | `name` | JWT claim to extract username from |
 
-### OAuth2/OIDC
+### OIDC
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OIDC_ISSUER` | `$JWT_ISSUER` | OIDC issuer URL (internal) |
 | `OIDC_PUBLIC_ISSUER` | `$OIDC_ISSUER` | OIDC issuer URL (public, for browser redirects) |
-| `OIDC_CLIENT_ID` | `dploy` | OAuth2 client ID |
-| `OIDC_CLIENT_SECRET` | `dploy-secret` | OAuth2 client secret |
-| `OIDC_REDIRECT_URL` | `http://localhost:8080/auth/callback` | OAuth2 callback URL |
+| `OIDC_CLIENT_ID` | `dploy` | OIDC client ID |
+| `OIDC_CLIENT_SECRET` | `dploy-secret` | OIDC client secret |
+| `OIDC_REDIRECT_URL` | `http://localhost:8080/auth/callback` | OIDC callback URL |
 
 ### Kubernetes
 

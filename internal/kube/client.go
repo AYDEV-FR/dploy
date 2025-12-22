@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/AYDEV-FR/dploy/internal/config"
 	"github.com/AYDEV-FR/dploy/internal/models"
+	"github.com/google/uuid"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -28,7 +28,7 @@ type Client struct {
 	config  *config.Config
 }
 
-// GetConfig returns the client's configuration
+// GetConfig returns the client's configuration.
 func (c *Client) GetConfig() *config.Config {
 	return c.config
 }
@@ -95,7 +95,7 @@ func (c *Client) ListUserApplications(ctx context.Context, username string) (*un
 	})
 }
 
-// ListAllDployApplications lists all ArgoCD Applications managed by dploy
+// ListAllDployApplications lists all ArgoCD Applications managed by dploy.
 func (c *Client) ListAllDployApplications(ctx context.Context) (*unstructured.UnstructuredList, error) {
 	return c.dynamic.Resource(applicationGVR).Namespace(c.config.ArgoCDNamespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "dploy.dev/owner",
@@ -163,7 +163,7 @@ func (c *Client) CreateApplication(ctx context.Context, username, envName string
 				"name":      appName,
 				"namespace": c.config.ArgoCDNamespace,
 				"finalizers": []interface{}{
-					"resources-finalizer.argocd.argoproj.io",
+					"argoproj.io/resources-finalizer",
 				},
 				"labels": map[string]interface{}{
 					"dploy.dev/owner": username,
@@ -175,8 +175,8 @@ func (c *Client) CreateApplication(ctx context.Context, username, envName string
 				},
 			},
 			"spec": map[string]interface{}{
-				"project":     c.config.ArgoCDProject,
-				"source":      source,
+				"project": c.config.ArgoCDProject,
+				"source":  source,
 				"destination": map[string]interface{}{
 					"server":    "https://kubernetes.default.svc",
 					"namespace": namespace,
@@ -215,7 +215,8 @@ func (c *Client) ExtendApplication(ctx context.Context, appName string) (time.Ti
 	var expiresTime time.Time
 	if currentExpires != "" {
 		// Parse ISO 8601 timestamp
-		if parsedTime, err := time.Parse(time.RFC3339, currentExpires); err == nil {
+		parsedTime, parseErr := time.Parse(time.RFC3339, currentExpires)
+		if parseErr == nil {
 			expiresTime = parsedTime
 		} else {
 			expiresTime = time.Now()
@@ -262,8 +263,9 @@ func (c *Client) DeleteApplication(ctx context.Context, appName string) error {
 		Resource: "namespaces",
 	}
 
-	// Ignore errors if namespace doesn't exist or is already being deleted
-	_ = c.dynamic.Resource(namespaceGVR).Delete(ctx, namespace, metav1.DeleteOptions{})
+	// Ignore errors if namespace doesn't exist or is already being deleted.
+	//nolint:errcheck // Intentionally ignoring error - namespace may not exist or already be deleted
+	_ = c.dynamic.Resource(namespaceGVR).Delete(ctx, namespace, metav1.DeleteOptions{}) // #nosec G104
 
 	return nil
 }
@@ -272,8 +274,8 @@ func (c *Client) GenerateURL(username, uuid string) string {
 	return fmt.Sprintf("https://%s-%s.%s", username, uuid, c.config.BaseDomain)
 }
 
-// replaceVariables replaces dynamic variables in extraValues
-// Supported variables: ${username}, ${user}, ${uuid}, ${ingressHost}, ${ingress}
+// replaceVariables replaces dynamic variables in extraValues.
+// Supported variables: ${username}, ${user}, ${uuid}, ${ingressHost}, ${ingress}.
 func replaceVariables(values, username, uuid, ingressHost string) string {
 	replacer := strings.NewReplacer(
 		"${username}", username,

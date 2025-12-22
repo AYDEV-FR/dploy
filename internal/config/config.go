@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/AYDEV-FR/dploy/internal/models"
@@ -16,7 +17,7 @@ type Config struct {
 	JWTAudience      string
 	JWTUsernameClaim string
 
-	// OAuth2/OIDC
+	// OIDC
 	OIDCIssuer       string // Internal issuer (for backend API calls)
 	OIDCPublicIssuer string // Public issuer (for browser redirects)
 	OIDCClientID     string
@@ -52,7 +53,7 @@ func Load(environmentsPath string) (*Config, error) {
 		JWTAudience:      getEnv("JWT_AUDIENCE", "dploy"),
 		JWTUsernameClaim: getEnv("JWT_USERNAME_CLAIM", "name"),
 
-		// OAuth2/OIDC
+		// OIDC
 		OIDCIssuer:       getEnv("OIDC_ISSUER", getEnv("JWT_ISSUER", "")),
 		OIDCPublicIssuer: getEnv("OIDC_PUBLIC_ISSUER", getEnv("OIDC_ISSUER", "")),
 		OIDCClientID:     getEnv("OIDC_CLIENT_ID", "dploy"),
@@ -65,9 +66,9 @@ func Load(environmentsPath string) (*Config, error) {
 
 		// Defaults
 		MaxEnvironmentsPerUser: getEnvAsInt("MAX_ENVIRONMENTS_PER_USER", 5),
-		DefaultTTL:             getEnvAsInt("DEFAULT_TTL", 86400),      // 24 hours in seconds
-		ExtendTTL:              getEnvAsInt("EXTEND_TTL", 7200),        // 2 hours in seconds
-		CleanupInterval:        getEnvAsInt("CLEANUP_INTERVAL", 60),    // 1 minute in seconds
+		DefaultTTL:             getEnvAsInt("DEFAULT_TTL", 86400),   // 24 hours in seconds
+		ExtendTTL:              getEnvAsInt("EXTEND_TTL", 7200),     // 2 hours in seconds
+		CleanupInterval:        getEnvAsInt("CLEANUP_INTERVAL", 60), // 1 minute in seconds
 
 		// Ingress
 		BaseDomain: getEnv("BASE_DOMAIN", "env.dploy.dev"),
@@ -85,7 +86,9 @@ func Load(environmentsPath string) (*Config, error) {
 	}
 
 	// Load environments from YAML file
-	data, err := os.ReadFile(environmentsPath)
+	// Clean the path to prevent directory traversal attacks (G304).
+	cleanPath := filepath.Clean(environmentsPath)
+	data, err := os.ReadFile(cleanPath) // #nosec G304 -- path is cleaned above
 	if err != nil {
 		return nil, fmt.Errorf("failed to read environments file: %w", err)
 	}

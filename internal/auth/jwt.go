@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
@@ -45,7 +46,15 @@ func NewJWTValidator(jwksURL, issuer, audience, usernameClaim string) *JWTValida
 }
 
 func (v *JWTValidator) fetchJWKS() error {
-	resp, err := http.Get(v.jwksURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, http.NoBody)
+	if err != nil {
+		return fmt.Errorf("failed to create JWKS request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to fetch JWKS: %w", err)
 	}
@@ -84,6 +93,7 @@ func (v *JWTValidator) getJWKS() (*JWKS, error) {
 	return jwks, nil
 }
 
+//nolint:gocyclo // Complexity is necessary for proper JWT validation with multiple security checks
 func (v *JWTValidator) ValidateToken(tokenString string) (string, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		// Check signing method
@@ -158,7 +168,7 @@ func (v *JWTValidator) ValidateToken(tokenString string) (string, error) {
 	return SanitizeUsername(username), nil
 }
 
-// jwkToRSAPublicKey converts a JWK to an RSA public key
+// jwkToRSAPublicKey converts a JWK to an RSA public key.
 func jwkToRSAPublicKey(jwk *JWK) (*rsa.PublicKey, error) {
 	// Decode the modulus (n) from base64url
 	nBytes, err := base64.RawURLEncoding.DecodeString(jwk.N)

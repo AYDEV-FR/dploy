@@ -44,6 +44,11 @@ kubectl wait --for=condition=Ready nodes --all --timeout=300s
 echo ""
 echo "🌐 Installation NGINX Ingress..."
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+
+# Ensure ingress controller runs on control-plane node (which has port mappings)
+kubectl patch deployment ingress-nginx-controller -n ingress-nginx --type=json \
+  -p='[{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {"ingress-ready": "true"}}]' 2>/dev/null || true
+
 kubectl wait --namespace ingress-nginx \
   --for=condition=ready pod \
   --selector=app.kubernetes.io/component=controller \
