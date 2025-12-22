@@ -1,0 +1,46 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dploy.fullname" . }}
+  labels:
+    {{- include "dploy.labels" . | nindent 4 }}
+rules:
+  # Read Environment CRDs
+  - apiGroups:
+      - dploy.dev
+    resources:
+      - environments
+    verbs:
+      - get
+      - list
+      - watch
+  # Manage ArgoCD Applications
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - applications
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Read ArgoCD AppProjects
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - appprojects
+    verbs:
+      - get
+      - list
+  # Manage namespaces (for cleanup when deleting environments)
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    verbs:
+      - get
+      - list
+      - delete

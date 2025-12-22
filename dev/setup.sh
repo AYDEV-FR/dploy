@@ -105,20 +105,23 @@ if [ "$RUNTIME" = "podman" ]; then
 fi
 kind load docker-image dploy-api:local --name dploy-test
 
-# === Déploiement Dploy ===
+# === Déploiement Dploy via Helm ===
 echo ""
-echo "🚀 Déploiement Dploy API..."
-kubectl create namespace dploy-system --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -f k8s/rbac.yaml
-kubectl apply -f k8s/configmaps.yaml
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/appproject.yaml
-kubectl apply -f k8s/ingress.yaml
+echo "🚀 Déploiement Dploy API via Helm..."
 
-kubectl wait --namespace dploy-system \
-  --for=condition=ready pod \
-  --selector=app=dploy-api \
-  --timeout=300s
+# Apply ArgoCD AppProject (not part of chart)
+kubectl apply -f k8s/appproject.yaml
+
+# Install Dploy using Helm chart
+helm upgrade --install dploy ./charts/dploy \
+  --namespace dploy-system \
+  --create-namespace \
+  --values dev/values.yaml \
+  --wait \
+  --timeout 5m
+
+# Apply ingresses for dev services (dex, argocd, grafana, prometheus)
+kubectl apply -f dev/manifests/ingresses.yaml
 
 # === Fin ===
 ARGOCD_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)

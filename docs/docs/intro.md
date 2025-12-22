@@ -34,6 +34,8 @@ Dploy is an all-in-one solution for managing temporary Kubernetes environments v
 
 ## Quick Start
 
+### Local Development (Kind)
+
 ```bash
 # Clone and setup with Kind
 git clone https://github.com/AYDEV-FR/dploy.git
@@ -51,6 +53,25 @@ This creates a complete local environment with:
 - Dex (OIDC)
 - Prometheus + Grafana
 - Dploy API
+
+### Production (Helm)
+
+```bash
+# Add repository
+helm repo add dploy https://aydev-fr.github.io/dploy
+helm repo update
+
+# Install
+helm install dploy dploy/dploy \
+  --namespace dploy-system \
+  --create-namespace \
+  --set auth.jwksURL="https://your-oidc.com/keys" \
+  --set auth.jwtIssuer="https://your-oidc.com" \
+  --set ingress.enabled=true \
+  --set ingress.host="dploy.your-domain.com"
+```
+
+See [Installation](/docs/installation) for detailed options including ArgoCD Application deployment.
 
 ## How It Works
 

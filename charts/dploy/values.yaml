@@ -1,0 +1,98 @@
+# Dploy Helm Chart Values
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/aydev-fr/dploy
+  pullPolicy: IfNotPresent
+  tag: "main"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# ArgoCD configuration
+argocd:
+  namespace: argocd
+  # Name of the ArgoCD AppProject to use (must exist)
+  project: dploy
+
+# Dploy API configuration
+config:
+  maxEnvironmentsPerUser: 5
+  defaultTTL: 86400      # 24 hours in seconds
+  extendTTL: 7200        # 2 hours in seconds
+  baseDomain: env.dploy.dev
+  serverHost: "0.0.0.0"
+  serverPort: 8080
+
+# OIDC/JWT configuration
+auth:
+  jwksURL: ""
+  jwtIssuer: ""
+  jwtAudience: dploy
+  jwtUsernameClaim: preferred_username
+  oidcClientID: dploy
+  oidcClientSecret: ""
+  oidcIssuer: ""
+  oidcPublicIssuer: ""
+  oidcRedirectURL: ""
+
+# Environments configuration
+# Define available environments that users can deploy
+environments: []
+  # - name: webterm
+  #   description: "Web terminal"
+  #   chart: "github.com/AYDEV-FR/dploy-charts/webshell@main"
+  #   enabled: true
+  #   icon: "terminal"
+  #   ttl: 3600
+  #   extraValues: |
+  #     ingress:
+  #       enabled: true
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  host: dploy.example.com
+  tls: []
+  #  - secretName: dploy-tls
+  #    hosts:
+  #      - dploy.example.com
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+podAnnotations: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop:
+      - ALL

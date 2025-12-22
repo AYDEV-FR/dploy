@@ -42,22 +42,23 @@ setup-dns: ## Setup local DNS (*.dploy.dev → 127.0.0.1)
 	./dev/setup-dns.sh
 
 # Deploy
-deploy: docker-load ## Build, load and deploy (fast iteration)
-	kubectl apply -f k8s/configmaps.yaml
-	kubectl apply -f k8s/deployment.yaml
-	kubectl rollout restart deployment/dploy-api -n dploy-system
-	kubectl rollout status deployment/dploy-api -n dploy-system
+deploy: docker-load ## Build, load and deploy via Helm (fast iteration)
+	helm upgrade --install dploy ./charts/dploy \
+		--namespace dploy-system \
+		--values dev/values.yaml \
+		--wait \
+		--timeout 2m
 
-deploy-all: docker-load ## Deploy all k8s resources
+deploy-manifests: docker-load ## Deploy using raw k8s manifests (legacy)
 	kubectl apply -f k8s/
 
 # Helpers
 logs: ## Show API logs
-	kubectl logs -n dploy-system -l app=dploy-api -f
+	kubectl logs -n dploy-system -l app.kubernetes.io/name=dploy -f
 
 port-forward: ## Port-forward to API (use with http://localhost:8080)
 	@echo "⚠️  With DNS setup, use http://dploy.dev instead"
-	kubectl port-forward -n dploy-system svc/dploy-api 8080:80
+	kubectl port-forward -n dploy-system svc/dploy 8080:80
 
 port-forward-dex: ## Port-forward to Dex (use with http://localhost:8082)
 	@echo "⚠️  With DNS setup, use http://auth.dploy.dev instead"
@@ -97,5 +98,5 @@ clean: ## Clean build artifacts
 	rm -f dploy-api
 
 restart: ## Restart API deployment
-	kubectl rollout restart deployment/dploy-api -n dploy-system
-	kubectl rollout status deployment/dploy-api -n dploy-system
+	kubectl rollout restart deployment/dploy -n dploy-system
+	kubectl rollout status deployment/dploy -n dploy-system
