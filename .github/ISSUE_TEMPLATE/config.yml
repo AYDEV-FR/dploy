@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://dploy.dev/docs
+    about: Check the documentation for answers
+  - name: Discussions
+    url: https://github.com/AYDEV-FR/dploy/discussions
+    about: Ask questions and discuss with the community
