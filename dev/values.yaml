@@ -1,0 +1,184 @@
+# Development values for Dploy Helm chart
+
+replicaCount: 1
+
+image:
+  repository: dploy-api
+  pullPolicy: Never  # Use local image loaded into Kind
+  tag: "local"
+
+# ArgoCD configuration
+argocd:
+  namespace: argocd
+  project: dploy
+
+# Dploy API configuration
+config:
+  maxEnvironmentsPerUser: 5
+  defaultTTL: 86400      # 24 hours
+  extendTTL: 7200        # 2 hours
+  baseDomain: env.dploy.localhost
+  serverHost: "0.0.0.0"
+  serverPort: 8080
+
+# OIDC/JWT configuration for Dex
+auth:
+  jwksURL: "http://dex.dex.svc.cluster.local:5556/keys"
+  jwtIssuer: "http://auth.dploy.localhost"
+  jwtAudience: dploy
+  jwtUsernameClaim: name
+  oidcClientID: dploy
+  oidcClientSecret: dploy-secret
+  oidcIssuer: "http://dex.dex.svc.cluster.local:5556"
+  oidcPublicIssuer: "http://auth.dploy.localhost"
+  oidcRedirectURL: "http://dploy.localhost/auth/callback"
+
+# Development environments
+environments:
+  - name: debian-terminal
+    description: "Terminal web pour étudiants"
+    chart: "github.com/AYDEV-FR/dploy-charts/webshell@main"
+    enabled: true
+    icon: "terminal"
+    ttl: 300
+    extraValues: |
+      container:
+        image:
+          repository: debian
+          tag: bookworm
+      networkPolicy:
+        enabled: false
+      ingress:
+        enabled: true
+        className: "nginx"
+        hosts:
+          - host: ${ingressHost}
+            paths:
+              - path: /
+                pathType: ImplementationSpecific
+        tls: []
+
+  - name: ubuntu-terminal
+    description: "Terminal web pour étudiants"
+    chart: "github.com/AYDEV-FR/dploy-charts/webshell@main"
+    enabled: true
+    icon: "terminal"
+    ttl: 300
+    extraValues: |
+      container:
+        image:
+          repository: ubuntu
+          tag: latest
+      networkPolicy:
+        enabled: false
+      ingress:
+        enabled: true
+        className: "nginx"
+        hosts:
+          - host: ${ingressHost}
+            paths:
+              - path: /
+                pathType: ImplementationSpecific
+        tls: []
+
+  - name: webterm-toolbox
+    description: "Terminal web pour étudiants"
+    chart: "github.com/AYDEV-FR/dploy-charts/webshell@main"
+    enabled: true
+    icon: "terminal"
+    ttl: 300
+    extraValues: |
+      container:
+        image:
+          repository: aydev/toolbox
+          tag: latest
+      networkPolicy:
+        enabled: false
+      ingress:
+        enabled: true
+        className: "nginx"
+        hosts:
+          - host: ${ingressHost}
+            paths:
+              - path: /
+                pathType: ImplementationSpecific
+        tls: []
+
+  - name: kali-desktop
+    description: "Kali Desktop"
+    chart: "github.com/AYDEV-FR/dploy-charts/kasm@main"
+    enabled: true
+    icon: "box"
+    ttl: 300
+    extraValues: |
+      image:
+        repository: kasmweb/core-kali-rolling
+        tag: 1.18.0
+      networkPolicy:
+        enabled: false
+      ingress:
+        enabled: true
+        className: "nginx"
+        hosts:
+          - host: ${ingressHost}
+            paths:
+              - path: /
+                pathType: ImplementationSpecific
+        tls: []
+
+  - name: ubuntu-desktop
+    description: "Ubuntu Desktop"
+    chart: "github.com/AYDEV-FR/dploy-charts/kasm@main"
+    enabled: true
+    icon: "box"
+    ttl: 300
+    extraValues: |
+      image:
+        repository: kasmweb/ubuntu-noble-desktop
+        tag: 1.18.0
+      networkPolicy:
+        enabled: false
+      ingress:
+        enabled: true
+        className: "nginx"
+        hosts:
+          - host: ${ingressHost}
+            paths:
+              - path: /
+                pathType: ImplementationSpecific
+        tls: []
+
+  - name: chromium
+    description: "Remote Virtual Browser"
+    chart: "github.com/AYDEV-FR/dploy-charts/kasm@main"
+    enabled: true
+    icon: "web"
+    ttl: 300
+    extraValues: |
+      image:
+        repository: kasmweb/chromium
+        tag: 1.18.0
+      networkPolicy:
+        enabled: false
+      ingress:
+        enabled: true
+        className: "nginx"
+        hosts:
+          - host: ${ingressHost}
+            paths:
+              - path: /
+                pathType: ImplementationSpecific
+        tls: []
+
+ingress:
+  enabled: true
+  className: nginx
+  host: dploy.localhost
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

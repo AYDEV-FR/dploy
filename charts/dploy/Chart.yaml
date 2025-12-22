@@ -1,0 +1,16 @@
+apiVersion: v2
+name: dploy
+description: A Helm chart for Dploy - on-demand Kubernetes environments using ArgoCD
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - dploy
+  - argocd
+  - kubernetes
+  - environments
+home: https://github.com/AYDEV-FR/dploy
+sources:
+  - https://github.com/AYDEV-FR/dploy
+maintainers:
+  - name: AYDEV-FR

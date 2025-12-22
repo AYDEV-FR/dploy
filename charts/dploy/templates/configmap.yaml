@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dploy.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dploy.labels" . | nindent 4 }}
+data:
+  ARGOCD_NAMESPACE: {{ .Values.argocd.namespace | quote }}
+  ARGOCD_PROJECT: {{ .Values.argocd.project | quote }}
+  MAX_ENVIRONMENTS_PER_USER: {{ .Values.config.maxEnvironmentsPerUser | quote }}
+  DEFAULT_TTL: {{ .Values.config.defaultTTL | quote }}
+  EXTEND_TTL: {{ .Values.config.extendTTL | quote }}
+  BASE_DOMAIN: {{ .Values.config.baseDomain | quote }}
+  SERVER_HOST: {{ .Values.config.serverHost | quote }}
+  SERVER_PORT: {{ .Values.config.serverPort | quote }}
+  JWT_AUDIENCE: {{ .Values.auth.jwtAudience | quote }}
+  JWT_USERNAME_CLAIM: {{ .Values.auth.jwtUsernameClaim | quote }}
+  OIDC_CLIENT_ID: {{ .Values.auth.oidcClientID | quote }}
+  {{- if .Values.auth.oidcRedirectURL }}
+  OIDC_REDIRECT_URL: {{ .Values.auth.oidcRedirectURL | quote }}
+  {{- end }}
