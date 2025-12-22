@@ -1,0 +1,48 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: dploy
+  namespace: argocd
+spec:
+  description: Dploy ephemeral environments project
+
+  # Allow deploying from Git repositories
+  # Use '*' to allow all repos, or list specific orgs/repos for security
+  sourceRepos:
+    - '*'  # Allow all Git repositories
+    # Or restrict to specific organizations:
+    # - 'https://github.com/AYDEV-FR/*'
+    # - 'https://github.com/bitnami/charts'
+
+  # Allow deploying to any namespace (we create namespaced resources)
+  destinations:
+    - namespace: '*'
+      server: 'https://kubernetes.default.svc'
+
+  # Cluster resources whitelist
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+
+  # Namespace resources whitelist
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'
+
+  # Deny certain sensitive resources
+  namespaceResourceBlacklist:
+    - group: ''
+      kind: ResourceQuota
+    - group: ''
+      kind: LimitRange
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRole
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRoleBinding
+
+  # Orphaned resources handling
+  orphanedResources:
+    warn: false
+
+  # Sync windows - allow syncing anytime
+  syncWindows: []

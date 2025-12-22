@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dploy - Ephemeral Environments</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <span class="brand-icon">🚀</span>
+                <span class="brand-name">Dploy.dev</span>
+            </div>
+            <div class="nav-menu">
+                <div id="login-form" style="display: none;">
+                    <button onclick="login()" class="btn-nav">Login with SSO</button>
+                </div>
+                <div id="user-info" style="display: none;">
+                    <div class="user-badge">
+                        <span class="user-icon">👤</span>
+                        <span id="username" class="username"></span>
+                    </div>
+                    <button onclick="logout()" class="btn-logout">Logout</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <div class="hero">
+        <div class="container">
+            <h1 class="hero-title">Launch Ephemeral Environments</h1>
+            <p class="hero-subtitle">Deploy temporary development environments in seconds</p>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="container">
+        <main id="main-content" style="display: none;">
+            <!-- Active Environments Section -->
+            <section class="section">
+                <div class="section-header">
+                    <div class="section-title">
+                        <h2>Active Environments</h2>
+                        <p class="section-description">Your running development environments</p>
+                    </div>
+                    <div class="section-actions">
+                        <div id="env-counter" class="env-counter"></div>
+                        <button onclick="loadEnvironments()" class="btn-refresh" title="Refresh">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div id="active-environments" class="env-list">
+                    <p class="loading">Loading...</p>
+                </div>
+            </section>
+
+            <!-- Available Environments Section -->
+            <section class="section">
+                <div class="section-header">
+                    <div class="section-title">
+                        <h2>Available Templates</h2>
+                        <p class="section-description">Choose an environment to deploy</p>
+                    </div>
+                </div>
+                <div id="available-environments" class="env-grid">
+                    <p class="loading">Loading...</p>
+                </div>
+            </section>
+        </main>
+
+        <!-- Login Required Message -->
+        <div id="login-required" class="login-required" style="display: none;">
+            <div class="login-card">
+                <div class="login-icon">🔐</div>
+                <h2>Authentication Required</h2>
+                <p>Please sign in with your SSO account to access Dploy</p>
+                <button onclick="login()" class="btn-login-large">Login with SSO</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast" class="toast"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
