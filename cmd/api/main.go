@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 
 	"github.com/AYDEV-FR/dploy/internal/auth"
@@ -40,13 +41,13 @@ func main() {
 	jwtValidator := auth.NewJWTValidator(cfg.JWKSUrl, cfg.JWTIssuer, cfg.JWTAudience, cfg.JWTUsernameClaim)
 	log.Printf("JWT validator initialized with JWKS URL: %s", cfg.JWKSUrl)
 
-	// Initialize OAuth handler
-	oauthHandler, err := auth.NewOAuthHandler(cfg)
+	// Initialize OIDC handler
+	oidcHandler, err := auth.NewOIDCHandler(cfg)
 	if err != nil {
-		log.Printf("Warning: OAuth handler initialization failed: %v", err)
-		log.Println("OAuth login will not be available")
+		log.Printf("Warning: OIDC handler initialization failed: %v", err)
+		log.Println("OIDC login will not be available")
 	} else {
-		log.Printf("OAuth handler initialized with issuer: %s", cfg.OIDCIssuer)
+		log.Printf("OIDC handler initialized with issuer: %s", cfg.OIDCIssuer)
 	}
 
 	// Initialize handlers
@@ -58,7 +59,8 @@ func main() {
 	app := fiber.New(fiber.Config{
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			code := fiber.StatusInternalServerError
-			if e, ok := err.(*fiber.Error); ok {
+			var e *fiber.Error
+			if errors.As(err, &e) {
 				code = e.Code
 			}
 			return c.Status(code).JSON(fiber.Map{
@@ -86,11 +88,11 @@ func main() {
 	app.Get("/health", healthHandler.Health)
 	app.Get("/ready", healthHandler.Ready)
 
-	// OAuth2/OIDC endpoints (no auth)
-	if oauthHandler != nil {
-		app.Get("/auth/login", oauthHandler.Login)
-		app.Get("/auth/callback", oauthHandler.Callback)
-		app.Get("/auth/logout", oauthHandler.Logout)
+	// OIDC endpoints (no auth)
+	if oidcHandler != nil {
+		app.Get("/auth/login", oidcHandler.Login)
+		app.Get("/auth/callback", oidcHandler.Callback)
+		app.Get("/auth/logout", oidcHandler.Logout)
 	}
 
 	// Public API endpoints

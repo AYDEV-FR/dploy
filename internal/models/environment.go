@@ -12,12 +12,12 @@ type Environment struct {
 	TTL         *int   `yaml:"ttl,omitempty" json:"ttl,omitempty"` // TTL in seconds
 }
 
-// ParseChart parses the chart string in format "github.com/org/repo/path/to/chart@revision"
-// Returns (repoURL, path, revision)
-func (e *Environment) ParseChart() (string, string, string) {
+// ParseChart parses the chart string in format "github.com/org/repo/path/to/chart@revision".
+// Returns (repoURL, path, revision).
+func (e *Environment) ParseChart() (repoURL, chartPath, revision string) {
 	// Split by @ to separate path from revision
 	parts := strings.Split(e.Chart, "@")
-	revision := "main"
+	revision = "main"
 	fullPath := e.Chart
 
 	if len(parts) == 2 {
@@ -31,14 +31,15 @@ func (e *Environment) ParseChart() (string, string, string) {
 
 	if len(pathParts) < 4 {
 		// Invalid format, return as-is
-		return "https://" + fullPath, "", revision
+		repoURL = "https://" + fullPath
+		return repoURL, "", revision
 	}
 
 	// Extract repo URL (first 3 parts: github.com/org/repo)
-	repoURL := "https://" + strings.Join(pathParts[:3], "/")
+	repoURL = "https://" + strings.Join(pathParts[:3], "/")
 
 	// Extract chart path (everything after the repo)
-	chartPath := strings.Join(pathParts[3:], "/")
+	chartPath = strings.Join(pathParts[3:], "/")
 
 	return repoURL, chartPath, revision
 }

@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"github.com/gofiber/fiber/v2"
 	"github.com/AYDEV-FR/dploy/internal/auth"
 	"github.com/AYDEV-FR/dploy/internal/kube"
 	"github.com/AYDEV-FR/dploy/internal/models"
+	"github.com/gofiber/fiber/v2"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -16,13 +16,14 @@ func NewEnvironmentsHandler(kubeClient *kube.Client) *EnvironmentsHandler {
 	return &EnvironmentsHandler{kubeClient: kubeClient}
 }
 
-// ListAvailable godoc
-// @Summary List available environments
-// @Description Get list of all enabled environments
-// @Tags environments
-// @Produce json
-// @Success 200 {array} models.AvailableEnvironmentResponse
-// @Router /api/environments/available [get]
+// ListAvailable returns a list of all available environments.
+//
+//	@Summary		List available environments
+//	@Description	Get list of all enabled environments
+//	@Tags			environments
+//	@Produce		json
+//	@Success		200	{array}	models.AvailableEnvironmentResponse
+//	@Router			/api/environments/available [get]
 func (h *EnvironmentsHandler) ListAvailable(c *fiber.Ctx) error {
 	envs := h.kubeClient.ListAvailableEnvironments()
 
@@ -38,17 +39,23 @@ func (h *EnvironmentsHandler) ListAvailable(c *fiber.Ctx) error {
 	return c.JSON(response)
 }
 
-// ListUserEnvironments godoc
-// @Summary List user's environments
-// @Description Get list of all environments for authenticated user
-// @Tags environments
-// @Security BearerAuth
-// @Produce json
-// @Success 200 {array} models.UserEnvironmentResponse
-// @Failure 401 {object} models.ErrorResponse
-// @Router /api/environments [get]
+// ListUserEnvironments returns all environments for the authenticated user.
+//
+//	@Summary		List user's environments
+//	@Description	Get list of all environments for authenticated user
+//	@Tags			environments
+//	@Security		BearerAuth
+//	@Produce		json
+//	@Success		200	{array}		models.UserEnvironmentResponse
+//	@Failure		401	{object}	models.ErrorResponse
+//	@Router			/api/environments [get]
 func (h *EnvironmentsHandler) ListUserEnvironments(c *fiber.Ctx) error {
-	username := c.Locals(auth.UserContextKey).(string)
+	username, ok := c.Locals(auth.UserContextKey).(string)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
+			Error: "unauthorized: missing user context",
+		})
+	}
 
 	apps, err := h.kubeClient.ListUserApplications(c.Context(), username)
 	if err != nil {
@@ -62,8 +69,8 @@ func (h *EnvironmentsHandler) ListUserEnvironments(c *fiber.Ctx) error {
 		labels := app.GetLabels()
 		annotations := app.GetAnnotations()
 
-		status := "pending"
-		if statusObj, found, _ := unstructured.NestedMap(app.Object, "status", "health"); found {
+		status := statusPending
+		if statusObj, found, err := unstructured.NestedMap(app.Object, "status", "health"); err == nil && found {
 			if healthStatus, ok := statusObj["status"].(string); ok {
 				status = healthStatus
 			}

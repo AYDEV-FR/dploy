@@ -8,13 +8,13 @@ import (
 	"github.com/AYDEV-FR/dploy/internal/kube"
 )
 
-// Worker handles TTL-based cleanup of expired environments
+// Worker handles TTL-based cleanup of expired environments.
 type Worker struct {
 	kubeClient *kube.Client
 	interval   time.Duration
 }
 
-// NewWorker creates a new cleanup worker
+// NewWorker creates a new cleanup worker.
 func NewWorker(kubeClient *kube.Client, intervalSeconds int) *Worker {
 	return &Worker{
 		kubeClient: kubeClient,
@@ -22,7 +22,7 @@ func NewWorker(kubeClient *kube.Client, intervalSeconds int) *Worker {
 	}
 }
 
-// Start begins the cleanup worker loop
+// Start begins the cleanup worker loop.
 func (w *Worker) Start(ctx context.Context) {
 	log.Printf("Starting TTL cleanup worker with interval: %v", w.interval)
 
@@ -43,7 +43,7 @@ func (w *Worker) Start(ctx context.Context) {
 	}
 }
 
-// cleanupExpired finds and deletes all expired environments
+// cleanupExpired finds and deletes all expired environments.
 func (w *Worker) cleanupExpired(ctx context.Context) {
 	apps, err := w.kubeClient.ListAllDployApplications(ctx)
 	if err != nil {

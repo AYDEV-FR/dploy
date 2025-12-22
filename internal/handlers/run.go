@@ -3,13 +3,15 @@ package handlers
 import (
 	"fmt"
 
-	"github.com/gofiber/fiber/v2"
 	"github.com/AYDEV-FR/dploy/internal/auth"
 	"github.com/AYDEV-FR/dploy/internal/config"
 	"github.com/AYDEV-FR/dploy/internal/kube"
 	"github.com/AYDEV-FR/dploy/internal/models"
+	"github.com/gofiber/fiber/v2"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
+
+const statusPending = "pending"
 
 type RunHandler struct {
 	kubeClient *kube.Client
@@ -23,20 +25,26 @@ func NewRunHandler(kubeClient *kube.Client, cfg *config.Config) *RunHandler {
 	}
 }
 
-// CreateEnvironment godoc
-// @Summary Create or get environment
-// @Description GET request that creates a new environment if it doesn't exist, or returns existing one
-// @Tags run
-// @Security BearerAuth
-// @Param env path string true "Environment name"
-// @Produce json
-// @Success 200 {object} models.RunEnvironmentResponse
-// @Failure 401 {object} models.ErrorResponse
-// @Failure 403 {object} models.ErrorResponse
-// @Failure 404 {object} models.ErrorResponse
-// @Router /run/{env} [get]
+// CreateEnvironment creates a new environment or returns an existing one.
+//
+//	@Summary		Create or get environment
+//	@Description	GET request that creates a new environment if it doesn't exist, or returns existing one
+//	@Tags			run
+//	@Security		BearerAuth
+//	@Param			env	path	string	true	"Environment name"
+//	@Produce		json
+//	@Success		200	{object}	models.RunEnvironmentResponse
+//	@Failure		401	{object}	models.ErrorResponse
+//	@Failure		403	{object}	models.ErrorResponse
+//	@Failure		404	{object}	models.ErrorResponse
+//	@Router			/run/{env} [get]
 func (h *RunHandler) CreateEnvironment(c *fiber.Ctx) error {
-	username := c.Locals(auth.UserContextKey).(string)
+	username, ok := c.Locals(auth.UserContextKey).(string)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
+			Error: "unauthorized: missing user context",
+		})
+	}
 	envName := c.Params("env")
 
 	env, err := h.kubeClient.GetEnvironment(envName)
@@ -83,19 +91,25 @@ func (h *RunHandler) CreateEnvironment(c *fiber.Ctx) error {
 	return h.buildResponseFromApp(c, app, username)
 }
 
-// GetStatus godoc
-// @Summary Get environment status
-// @Description Get status of a user's environment
-// @Tags run
-// @Security BearerAuth
-// @Param env path string true "Environment name"
-// @Produce json
-// @Success 200 {object} models.StatusResponse
-// @Failure 401 {object} models.ErrorResponse
-// @Failure 404 {object} models.ErrorResponse
-// @Router /api/run/{env}/status [get]
+// GetStatus returns the status of a user's environment.
+//
+//	@Summary		Get environment status
+//	@Description	Get status of a user's environment
+//	@Tags			run
+//	@Security		BearerAuth
+//	@Param			env	path	string	true	"Environment name"
+//	@Produce		json
+//	@Success		200	{object}	models.StatusResponse
+//	@Failure		401	{object}	models.ErrorResponse
+//	@Failure		404	{object}	models.ErrorResponse
+//	@Router			/api/run/{env}/status [get]
 func (h *RunHandler) GetStatus(c *fiber.Ctx) error {
-	username := c.Locals(auth.UserContextKey).(string)
+	username, ok := c.Locals(auth.UserContextKey).(string)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
+			Error: "unauthorized: missing user context",
+		})
+	}
 	envName := c.Params("env")
 
 	app, err := h.kubeClient.GetUserApplication(c.Context(), username, envName)
@@ -115,8 +129,8 @@ func (h *RunHandler) GetStatus(c *fiber.Ctx) error {
 	uuid := annotations["dploy.dev/uuid"]
 	expiresAt := annotations["dploy.dev/expires-at"]
 
-	status := "pending"
-	if statusObj, found, _ := unstructured.NestedMap(app.Object, "status", "health"); found {
+	status := statusPending
+	if statusObj, found, err := unstructured.NestedMap(app.Object, "status", "health"); err == nil && found {
 		if healthStatus, ok := statusObj["status"].(string); ok {
 			status = healthStatus
 		}
@@ -132,19 +146,25 @@ func (h *RunHandler) GetStatus(c *fiber.Ctx) error {
 	})
 }
 
-// ExtendTTL godoc
-// @Summary Extend environment TTL
-// @Description Extend the TTL of a user's environment by configured hours
-// @Tags run
-// @Security BearerAuth
-// @Param env path string true "Environment name"
-// @Produce json
-// @Success 200 {object} models.ExtendResponse
-// @Failure 401 {object} models.ErrorResponse
-// @Failure 404 {object} models.ErrorResponse
-// @Router /api/run/{env}/extend [post]
+// ExtendTTL extends the TTL of a user's environment.
+//
+//	@Summary		Extend environment TTL
+//	@Description	Extend the TTL of a user's environment by configured hours
+//	@Tags			run
+//	@Security		BearerAuth
+//	@Param			env	path	string	true	"Environment name"
+//	@Produce		json
+//	@Success		200	{object}	models.ExtendResponse
+//	@Failure		401	{object}	models.ErrorResponse
+//	@Failure		404	{object}	models.ErrorResponse
+//	@Router			/api/run/{env}/extend [post]
 func (h *RunHandler) ExtendTTL(c *fiber.Ctx) error {
-	username := c.Locals(auth.UserContextKey).(string)
+	username, ok := c.Locals(auth.UserContextKey).(string)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
+			Error: "unauthorized: missing user context",
+		})
+	}
 	envName := c.Params("env")
 
 	app, err := h.kubeClient.GetUserApplication(c.Context(), username, envName)
@@ -173,18 +193,24 @@ func (h *RunHandler) ExtendTTL(c *fiber.Ctx) error {
 	})
 }
 
-// DeleteEnvironment godoc
-// @Summary Delete environment
-// @Description Delete a user's environment
-// @Tags run
-// @Security BearerAuth
-// @Param env path string true "Environment name"
-// @Success 204 "No Content"
-// @Failure 401 {object} models.ErrorResponse
-// @Failure 404 {object} models.ErrorResponse
-// @Router /api/run/{env} [delete]
+// DeleteEnvironment deletes a user's environment.
+//
+//	@Summary		Delete environment
+//	@Description	Delete a user's environment
+//	@Tags			run
+//	@Security		BearerAuth
+//	@Param			env	path	string	true	"Environment name"
+//	@Success		204	"No Content"
+//	@Failure		401	{object}	models.ErrorResponse
+//	@Failure		404	{object}	models.ErrorResponse
+//	@Router			/api/run/{env} [delete]
 func (h *RunHandler) DeleteEnvironment(c *fiber.Ctx) error {
-	username := c.Locals(auth.UserContextKey).(string)
+	username, ok := c.Locals(auth.UserContextKey).(string)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
+			Error: "unauthorized: missing user context",
+		})
+	}
 	envName := c.Params("env")
 
 	app, err := h.kubeClient.GetUserApplication(c.Context(), username, envName)
@@ -215,8 +241,8 @@ func (h *RunHandler) buildResponseFromApp(c *fiber.Ctx, app *unstructured.Unstru
 	uuid := annotations["dploy.dev/uuid"]
 	expiresAt := annotations["dploy.dev/expires-at"]
 
-	status := "pending"
-	if statusObj, found, _ := unstructured.NestedMap(app.Object, "status", "health"); found {
+	status := statusPending
+	if statusObj, found, err := unstructured.NestedMap(app.Object, "status", "health"); err == nil && found {
 		if healthStatus, ok := statusObj["status"].(string); ok {
 			status = healthStatus
 		}

@@ -259,7 +259,7 @@ Delete a user's environment.
 
 ### GET /auth/login
 
-Initiate OAuth2 authorization code flow.
+Initiate OIDC authorization code flow.
 
 **Query Parameters:**
 
@@ -276,7 +276,7 @@ Initiate OAuth2 authorization code flow.
 
 ### GET /auth/callback
 
-Handle OAuth2 callback from OIDC provider.
+Handle OIDC callback from provider.
 
 **Query Parameters:**
 

@@ -160,7 +160,7 @@ dploy/
 ├── cmd/api/              # Application entry point
 │   └── main.go
 ├── internal/             # Core business logic
-│   ├── auth/            # JWT/OAuth handlers
+│   ├── auth/            # JWT/OIDC handlers
 │   ├── config/          # Configuration loading
 │   ├── handlers/        # HTTP request handlers
 │   ├── kube/            # Kubernetes client
@@ -209,7 +209,7 @@ dploy/
 
 - `jwt.go`: JWKS fetching and JWT validation
 - `middleware.go`: Fiber middleware for auth
-- `oauth.go`: OAuth2 authorization code flow
+- `oidc.go`: OIDC authorization code flow
 
 ## Running Tests
 

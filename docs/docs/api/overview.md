@@ -22,7 +22,7 @@ curl -H "Authorization: Bearer $TOKEN" https://dploy.your-domain.com/api/environ
 
 ### Obtaining a Token
 
-#### Via OAuth2 Flow
+#### Via OIDC Flow
 
 1. Redirect users to `/auth/login`
 2. After authentication, users are redirected back with token in URL hash
@@ -106,8 +106,8 @@ Alternative paths with `/api` prefix:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/auth/login` | No | Initiate OAuth2 login flow |
-| GET | `/auth/callback` | No | OAuth2 callback handler |
+| GET | `/auth/login` | No | Initiate OIDC login flow |
+| GET | `/auth/callback` | No | OIDC callback handler |
 | GET | `/auth/logout` | No | Logout (clears client state) |
 
 ## Quick Examples
