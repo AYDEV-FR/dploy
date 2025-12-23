@@ -31,6 +31,19 @@ data:
           sub_mode: user_username
           include_claims_in_id_token: true
           issuer_mode: per_provider
+          # Use RSA signing key for JWT (required for JWKS validation)
+          signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Internal JWT Certificate]]
+
+      # Policy to allow all authenticated users (not just internal users)
+      - model: authentik_policies_expression.expressionpolicy
+        id: allow-all-users-policy
+        identifiers:
+          name: dploy-allow-all-users
+        attrs:
+          name: dploy-allow-all-users
+          expression: |
+            # Allow all authenticated users
+            return True
 
       # Create Application
       - model: authentik_core.application
@@ -42,6 +55,17 @@ data:
           slug: dploy
           provider: !KeyOf dploy-provider
           policy_engine_mode: any
+
+      # Bind allow-all policy to the application
+      - model: authentik_policies.policybinding
+        identifiers:
+          target: !KeyOf dploy-app
+          policy: !KeyOf allow-all-users-policy
+          order: 0
+        attrs:
+          enabled: true
+          negate: false
+          timeout: 30
 
       # Update default brand to use Dploy branding
       - model: authentik_brands.brand
