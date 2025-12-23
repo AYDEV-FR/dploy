@@ -184,3 +184,20 @@ data:
                   - path: /
                     pathType: ImplementationSpecific
             tls: []
+
+      - name: vscode
+        description: "VSCode"
+        chart: "github.com/AYDEV-FR/dploy-charts/vscode@main"
+        enabled: true
+        icon: "book"
+        ttl: 300
+        extraValues: |
+          ingress:
+            enabled: true
+            className: "nginx"
+            hosts:
+              - host: ${ingressHost}
+                paths:
+                  - path: /
+                    pathType: ImplementationSpecific
+            tls: []
