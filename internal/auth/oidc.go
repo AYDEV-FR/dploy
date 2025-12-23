@@ -204,13 +204,17 @@ func (h *OIDCHandler) Login(c *fiber.Ctx) error {
 	// Get returnUrl from query parameter (optional).
 	returnURL := c.Query("returnUrl", "/")
 
+	fmt.Printf("OIDC login: returnUrl='%s', fullURL='%s', queryString='%s'\n", returnURL, c.OriginalURL(), string(c.Request().URI().QueryString()))
+
 	// Validate returnUrl - must be a relative path starting with /
 	// This prevents open redirect vulnerabilities and invalid paths
 	if !strings.HasPrefix(returnURL, "/") {
+		fmt.Printf("OIDC login: invalid returnUrl '%s', defaulting to '/'\n", returnURL)
 		returnURL = "/"
 	}
 
 	state := h.generateState(returnURL)
+	fmt.Printf("OIDC login: stored returnUrl '%s' with state\n", returnURL)
 
 	params := url.Values{}
 	params.Set("client_id", h.config.OIDCClientID)
@@ -274,12 +278,15 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 	returnURL := "/"
 	if stateData != nil && stateData.ReturnURL != "" {
 		returnURL = stateData.ReturnURL
+		fmt.Printf("OIDC callback: retrieved returnURL from state: '%s'\n", returnURL)
+	} else {
+		fmt.Printf("OIDC callback: no returnURL in state, using default '/'\n")
 	}
 
 	// Ensure returnURL is a valid absolute path (starts with /)
 	// This prevents redirect issues from corrupted state data
 	if !strings.HasPrefix(returnURL, "/") {
-		fmt.Printf("OIDC callback: invalid returnURL '%s', defaulting to '/'\n", returnURL)
+		fmt.Printf("OIDC callback: invalid returnURL '%s' (no leading /), defaulting to '/'\n", returnURL)
 		returnURL = "/"
 	}
 
