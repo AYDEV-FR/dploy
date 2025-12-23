@@ -50,7 +50,7 @@ Built-in background worker for automatic TTL cleanup:
 
 ### OIDC Provider
 
-External identity provider (Dex, Keycloak, Okta):
+External identity provider (Authentik, Keycloak, Okta):
 
 - Issues JWT tokens
 - Provides JWKS endpoint for validation

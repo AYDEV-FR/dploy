@@ -25,7 +25,7 @@ http://localhost:8080/
 ### Login
 
 1. Click **"Login with SSO"** button
-2. You'll be redirected to your OIDC provider (Dex, Keycloak, etc.)
+2. You'll be redirected to your OIDC provider (Authentik, Keycloak, etc.)
 3. Enter your credentials
 4. After successful login, you're redirected back to Dploy
 

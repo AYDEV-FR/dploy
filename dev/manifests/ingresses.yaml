@@ -1,11 +1,14 @@
 # Ingresses for dev services (not part of Dploy chart)
 ---
-# Dex OIDC Provider
+# Authentik OIDC Provider
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: dex
-  namespace: dex
+  name: authentik
+  namespace: authentik
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
 spec:
   ingressClassName: nginx
   rules:
@@ -16,9 +19,9 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: dex
+                name: authentik-server
                 port:
-                  number: 5556
+                  number: 80
 ---
 # ArgoCD UI
 apiVersion: networking.k8s.io/v1

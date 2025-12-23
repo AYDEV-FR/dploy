@@ -1,0 +1,261 @@
+# Authentik Blueprints for Dploy OAuth2/OIDC configuration
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: authentik-blueprints
+  namespace: authentik
+data:
+  dploy-oauth2.yaml: |
+    version: 1
+    metadata:
+      name: Dploy OAuth2 Provider
+    entries:
+      # Create OAuth2 Provider
+      - model: authentik_providers_oauth2.oauth2provider
+        id: dploy-provider
+        identifiers:
+          name: dploy
+        attrs:
+          name: dploy
+          authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+          invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+          client_type: confidential
+          client_id: dploy
+          client_secret: dploy-secret
+          redirect_uris:
+            - matching_mode: strict
+              url: "http://dploy.localhost/auth/callback"
+            - matching_mode: strict
+              url: "http://localhost:8080/auth/callback"
+          sub_mode: user_username
+          include_claims_in_id_token: true
+          issuer_mode: per_provider
+
+      # Create Application
+      - model: authentik_core.application
+        id: dploy-app
+        identifiers:
+          slug: dploy
+        attrs:
+          name: Dploy
+          slug: dploy
+          provider: !KeyOf dploy-provider
+          policy_engine_mode: any
+
+      # Update default brand to use Dploy branding
+      - model: authentik_brands.brand
+        identifiers:
+          domain: authentik-default
+        attrs:
+          branding_title: Dploy
+          flow_authentication: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+          flow_invalidation: !Find [authentik_flows.flow, [slug, default-invalidation-flow]]
+          flow_user_settings: !Find [authentik_flows.flow, [slug, default-user-settings-flow]]
+
+      # Update default identification stage to show enrollment link
+      - model: authentik_stages_identification.identificationstage
+        identifiers:
+          name: default-authentication-identification
+        attrs:
+          user_fields:
+            - email
+            - username
+          enrollment_flow: !Find [authentik_flows.flow, [slug, dploy-enrollment]]
+
+  # Enrollment flow with email domain restriction and invitation code
+  dploy-enrollment.yaml: |
+    version: 1
+    metadata:
+      name: Dploy Enrollment Flow
+    entries:
+      # Enrollment Flow
+      - model: authentik_flows.flow
+        id: dploy-enrollment-flow
+        identifiers:
+          slug: dploy-enrollment
+        attrs:
+          name: Dploy User Registration
+          title: Register for Dploy
+          designation: enrollment
+          authentication: require_unauthenticated
+
+      # Email domain validation policy (only @example.com allowed)
+      - model: authentik_policies_expression.expressionpolicy
+        id: email-domain-policy
+        identifiers:
+          name: dploy-email-domain-check
+        attrs:
+          name: dploy-email-domain-check
+          expression: |
+            # Check if email ends with allowed domain
+            email = request.context.get('prompt_data', {}).get('email', '')
+            allowed_domains = ['@example.com']
+            if not email:
+                return True  # Allow if no email yet (pre-prompt)
+            for domain in allowed_domains:
+                if email.lower().endswith(domain.lower()):
+                    return True
+            ak_message("Only email addresses from example.com are allowed to register.")
+            return False
+
+      # Invitation code validation policy (code must be "welcome")
+      - model: authentik_policies_expression.expressionpolicy
+        id: invite-code-policy
+        identifiers:
+          name: dploy-invite-code-check
+        attrs:
+          name: dploy-invite-code-check
+          expression: |
+            # Check if invite code matches
+            invite_code = request.context.get('prompt_data', {}).get('invite_code', '')
+            valid_codes = ['welcome']
+            if invite_code.lower() in [c.lower() for c in valid_codes]:
+                return True
+            ak_message("Invalid invitation code. Please contact an administrator.")
+            return False
+
+      # Invite code prompt field
+      - model: authentik_stages_prompt.prompt
+        id: prompt-invite-code
+        identifiers:
+          name: dploy-enrollment-invite-code
+        attrs:
+          field_key: invite_code
+          label: Invitation Code
+          type: text
+          required: true
+          placeholder: Enter your invitation code
+          order: 0
+
+      # Invite code prompt stage
+      - model: authentik_stages_prompt.promptstage
+        id: invite-code-stage
+        identifiers:
+          name: dploy-invite-code-prompt
+        attrs:
+          name: dploy-invite-code-prompt
+          fields:
+            - !KeyOf prompt-invite-code
+          validation_policies:
+            - !KeyOf invite-code-policy
+
+      # Prompt fields
+      - model: authentik_stages_prompt.prompt
+        id: prompt-username
+        identifiers:
+          name: dploy-enrollment-username
+        attrs:
+          field_key: username
+          label: Username
+          type: username
+          required: true
+          placeholder: Username
+          order: 0
+
+      - model: authentik_stages_prompt.prompt
+        id: prompt-email
+        identifiers:
+          name: dploy-enrollment-email
+        attrs:
+          field_key: email
+          label: Email
+          type: email
+          required: true
+          placeholder: your.email@example.com
+          order: 1
+
+      - model: authentik_stages_prompt.prompt
+        id: prompt-password
+        identifiers:
+          name: dploy-enrollment-password
+        attrs:
+          field_key: password
+          label: Password
+          type: password
+          required: true
+          placeholder: Password
+          order: 2
+
+      - model: authentik_stages_prompt.prompt
+        id: prompt-password-repeat
+        identifiers:
+          name: dploy-enrollment-password-repeat
+        attrs:
+          field_key: password_repeat
+          label: Confirm Password
+          type: password
+          required: true
+          placeholder: Confirm Password
+          order: 3
+
+      # Prompt Stage (combines all prompt fields)
+      - model: authentik_stages_prompt.promptstage
+        id: prompt-stage
+        identifiers:
+          name: dploy-enrollment-prompt
+        attrs:
+          name: dploy-enrollment-prompt
+          fields:
+            - !KeyOf prompt-username
+            - !KeyOf prompt-email
+            - !KeyOf prompt-password
+            - !KeyOf prompt-password-repeat
+          validation_policies:
+            - !KeyOf email-domain-policy
+
+      # User Write Stage
+      - model: authentik_stages_user_write.userwritestage
+        id: user-write-stage
+        identifiers:
+          name: dploy-enrollment-user-write
+        attrs:
+          name: dploy-enrollment-user-write
+          user_creation_mode: always_create
+
+      # User Login Stage
+      - model: authentik_stages_user_login.userloginstage
+        id: user-login-stage
+        identifiers:
+          name: dploy-enrollment-user-login
+        attrs:
+          name: dploy-enrollment-user-login
+
+      # Flow Stage Bindings (order matters)
+      # Step 1: Invite code validation
+      - model: authentik_flows.flowstagebinding
+        identifiers:
+          target: !KeyOf dploy-enrollment-flow
+          stage: !KeyOf invite-code-stage
+          order: 10
+        attrs:
+          evaluate_on_plan: true
+          re_evaluate_policies: false
+
+      # Step 2: User registration form
+      - model: authentik_flows.flowstagebinding
+        identifiers:
+          target: !KeyOf dploy-enrollment-flow
+          stage: !KeyOf prompt-stage
+          order: 20
+        attrs:
+          evaluate_on_plan: true
+          re_evaluate_policies: true
+
+      - model: authentik_flows.flowstagebinding
+        identifiers:
+          target: !KeyOf dploy-enrollment-flow
+          stage: !KeyOf user-write-stage
+          order: 30
+        attrs:
+          evaluate_on_plan: true
+          re_evaluate_policies: false
+
+      - model: authentik_flows.flowstagebinding
+        identifiers:
+          target: !KeyOf dploy-enrollment-flow
+          stage: !KeyOf user-login-stage
+          order: 40
+        attrs:
+          evaluate_on_plan: true
+          re_evaluate_policies: false

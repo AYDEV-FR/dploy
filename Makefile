@@ -60,9 +60,9 @@ port-forward: ## Port-forward to API (use with http://localhost:8080)
 	@echo "⚠️  With DNS setup, use http://dploy.dev instead"
 	kubectl port-forward -n dploy-system svc/dploy 8080:80
 
-port-forward-dex: ## Port-forward to Dex (use with http://localhost:8082)
-	@echo "⚠️  With DNS setup, use http://auth.dploy.dev instead"
-	kubectl port-forward -n dex svc/dex 8082:5556
+port-forward-authentik: ## Port-forward to Authentik (use with http://localhost:9000)
+	@echo "⚠️  With DNS setup, use http://auth.dploy.localhost instead"
+	kubectl port-forward -n authentik svc/authentik-server 9000:80
 
 port-forward-argocd: ## Port-forward to ArgoCD UI
 	@echo "ArgoCD admin password:"
@@ -71,8 +71,15 @@ port-forward-argocd: ## Port-forward to ArgoCD UI
 	@echo "Opening port-forward on https://localhost:8081"
 	kubectl port-forward svc/argocd-server -n argocd 8081:443
 
-get-token: ## Get JWT token from Dex
-	./dev/get-token.sh
+get-token: ## Get JWT token from Authentik (interactive browser login)
+	@echo "To get a token, visit: http://dploy.localhost"
+	@echo "Click 'Login' and authenticate with:"
+	@echo "  User: akadmin"
+	@echo "  Pass: password"
+	@echo ""
+	@echo "The token will be stored in your browser."
+	@echo "To use it with curl, open browser DevTools > Application > Local Storage"
+	@echo "and copy the 'token' value."
 
 # Testing
 test-health: ## Test health endpoints

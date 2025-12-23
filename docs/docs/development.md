@@ -31,7 +31,7 @@ This script automatically:
 3. Installs ArgoCD
 4. Installs Cert-Manager
 5. Deploys Prometheus + Grafana
-6. Deploys Dex (OIDC provider)
+6. Deploys Authentik (OIDC provider)
 7. Builds and loads the Dploy image
 8. Deploys all Dploy manifests
 
@@ -56,15 +56,27 @@ kubectl create namespace argocd
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 ```
 
-### 3. Deploy Dex
+### 3. Deploy Authentik
 
 ```bash
-kubectl create namespace dex
-kubectl apply -f dev/manifests/dex.yaml
+kubectl create namespace authentik
+
+# Apply blueprints ConfigMap
+kubectl apply -f dev/manifests/authentik-blueprints.yaml
+
+# Add Authentik Helm repo
+helm repo add authentik https://charts.goauthentik.io
+helm repo update
+
+# Install Authentik
+helm upgrade --install authentik authentik/authentik \
+  --namespace authentik \
+  --values dev/authentik-values.yaml \
+  --wait --timeout 10m
 ```
 
 Default credentials:
-- Email: `admin@example.com`
+- Username: `akadmin`
 - Password: `password`
 
 ### 4. Build and Load Image
@@ -120,7 +132,7 @@ make port-forward-argocd
 ### Testing
 
 ```bash
-# Get a JWT token from Dex
+# Get a JWT token from Authentik (interactive login)
 make get-token
 export TOKEN='...'
 
@@ -258,7 +270,7 @@ kind delete cluster --name dploy-test
 |---------|-----|
 | Dploy UI | http://dploy.localhost |
 | Dploy API | http://dploy.localhost/api |
-| Dex Auth | http://auth.dploy.localhost |
+| Authentik | http://auth.dploy.localhost |
 | ArgoCD | https://argocd.dploy.localhost |
 | Grafana | http://grafana.dploy.localhost |
 | Prometheus | http://prometheus.dploy.localhost |

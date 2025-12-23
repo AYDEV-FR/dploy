@@ -82,7 +82,7 @@ stringData:
   OIDC_REDIRECT_URL: "https://dploy.example.com/auth/callback"
 ```
 
-### Development with Dex
+### Development with Authentik
 
 ```yaml
 apiVersion: v1
@@ -91,9 +91,9 @@ metadata:
   name: dploy-api-secrets
   namespace: dploy-system
 stringData:
-  JWKS_URL: "http://dex.dex.svc.cluster.local:5556/keys"
-  JWT_ISSUER: "http://auth.dploy.localhost"
-  OIDC_ISSUER: "http://dex.dex.svc.cluster.local:5556"
+  JWKS_URL: "http://authentik-server.authentik.svc.cluster.local/application/o/dploy/jwks/"
+  JWT_ISSUER: "http://auth.dploy.localhost/application/o/dploy/"
+  OIDC_ISSUER: "http://authentik-server.authentik.svc.cluster.local"
   OIDC_PUBLIC_ISSUER: "http://auth.dploy.localhost"
   OIDC_CLIENT_ID: "dploy"
   OIDC_CLIENT_SECRET: "dploy-secret"
