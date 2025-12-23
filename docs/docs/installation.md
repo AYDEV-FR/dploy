@@ -12,7 +12,7 @@ Before installing Dploy, ensure you have:
 
 - **Kubernetes cluster** (1.25+)
 - **ArgoCD** installed and configured
-- **OIDC Provider** (Dex, Keycloak, Okta, etc.) for JWT authentication
+- **OIDC Provider** (Authentik, Keycloak, Okta, etc.) for JWT authentication
 - **Ingress Controller** (NGINX recommended)
 - **kubectl** and **Helm** configured to access your cluster
 
@@ -26,7 +26,7 @@ cd dploy
 ./dev/setup.sh
 ```
 
-This creates a complete local environment with Kind, ArgoCD, Dex, and Dploy.
+This creates a complete local environment with Kind, ArgoCD, Authentik, and Dploy.
 
 ---
 

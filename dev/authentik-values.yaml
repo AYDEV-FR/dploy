@@ -1,0 +1,71 @@
+# Authentik Helm chart values for development
+# Chart: https://github.com/goauthentik/helm
+# Repo: https://charts.goauthentik.io
+
+# Authentik core configuration
+authentik:
+  secret_key: "dev-secret-key-change-in-production-minimum-50-characters-long"
+  error_reporting:
+    enabled: false
+  # Bootstrap admin credentials (used on first install)
+  bootstrap_password: "password"
+  bootstrap_email: "admin@example.com"
+  # PostgreSQL connection settings
+  postgresql:
+    password: "authentik-postgres-dev"
+  # Redis connection settings (external Redis)
+  redis:
+    host: "authentik-redis-master"
+
+# Server configuration
+server:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  ingress:
+    enabled: false  # We manage ingress separately
+
+# Worker configuration
+worker:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# Enable bundled PostgreSQL (Bitnami chart)
+postgresql:
+  enabled: true
+  auth:
+    username: authentik
+    database: authentik
+    password: "authentik-postgres-dev"
+  primary:
+    persistence:
+      enabled: true
+      size: 1Gi
+
+# Disable bundled Redis (using external)
+redis:
+  enabled: false
+
+# Mount blueprints from ConfigMap
+blueprints:
+  configMaps:
+    - authentik-blueprints
+
+# Global settings
+global:
+  env:
+    - name: AUTHENTIK_BOOTSTRAP_PASSWORD
+      value: "password"
+    - name: AUTHENTIK_BOOTSTRAP_EMAIL
+      value: "admin@example.com"

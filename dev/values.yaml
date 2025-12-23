@@ -21,16 +21,18 @@ config:
   serverHost: "0.0.0.0"
   serverPort: 8080
 
-# OIDC/JWT configuration for Dex
+# OIDC/JWT configuration (generic - works with any OIDC provider)
 auth:
-  jwksURL: "http://dex.dex.svc.cluster.local:5556/keys"
-  jwtIssuer: "http://auth.dploy.localhost"
+  jwksURL: "http://authentik-server.authentik.svc.cluster.local/application/o/dploy/jwks/"
+  # JWT issuer must match what the OIDC provider puts in the token (internal URL for token exchange)
+  jwtIssuer: "http://authentik-server.authentik.svc.cluster.local/application/o/dploy/"
   jwtAudience: dploy
-  jwtUsernameClaim: name
+  jwtUsernameClaim: sub  # Use "sub" claim for username (standard OIDC)
   oidcClientID: dploy
   oidcClientSecret: dploy-secret
-  oidcIssuer: "http://dex.dex.svc.cluster.local:5556"
-  oidcPublicIssuer: "http://auth.dploy.localhost"
+  # OIDC issuer URLs - discovery will fetch endpoints automatically
+  oidcIssuer: "http://authentik-server.authentik.svc.cluster.local/application/o/dploy"
+  oidcPublicIssuer: "http://auth.dploy.localhost/application/o/dploy"
   oidcRedirectURL: "http://dploy.localhost/auth/callback"
 
 # Development environments

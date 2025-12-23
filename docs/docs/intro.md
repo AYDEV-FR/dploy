@@ -50,7 +50,7 @@ This creates a complete local environment with:
 - Kind cluster (3 nodes)
 - NGINX Ingress
 - ArgoCD
-- Dex (OIDC)
+- Authentik (OIDC)
 - Prometheus + Grafana
 - Dploy API
 
