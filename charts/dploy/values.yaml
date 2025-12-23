@@ -50,6 +50,7 @@ environments: []
   #   description: "Web terminal"
   #   chart: "github.com/AYDEV-FR/dploy-charts/webshell@main"
   #   enabled: true
+  #   visible: true    # Set to false to hide from listings (still accessible via /run/{name})
   #   icon: "terminal"
   #   ttl: 3600
   #   extraValues: |
