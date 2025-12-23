@@ -204,6 +204,12 @@ func (h *OIDCHandler) Login(c *fiber.Ctx) error {
 	// Get returnUrl from query parameter (optional).
 	returnURL := c.Query("returnUrl", "/")
 
+	// Validate returnUrl - must be a relative path starting with /
+	// This prevents open redirect vulnerabilities and invalid paths
+	if !strings.HasPrefix(returnURL, "/") {
+		returnURL = "/"
+	}
+
 	state := h.generateState(returnURL)
 
 	params := url.Values{}
@@ -268,6 +274,13 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 	returnURL := "/"
 	if stateData != nil && stateData.ReturnURL != "" {
 		returnURL = stateData.ReturnURL
+	}
+
+	// Ensure returnURL is a valid absolute path (starts with /)
+	// This prevents redirect issues from corrupted state data
+	if !strings.HasPrefix(returnURL, "/") {
+		fmt.Printf("OIDC callback: invalid returnURL '%s', defaulting to '/'\n", returnURL)
+		returnURL = "/"
 	}
 
 	// Redirect with token in hash fragment (client-side only, not sent to server).

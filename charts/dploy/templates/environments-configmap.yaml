@@ -13,6 +13,7 @@ data:
         description: {{ .description | quote }}
         chart: {{ .chart | quote }}
         enabled: {{ .enabled }}
+        visible: {{ .visible | quote }}
         icon: {{ .icon | quote }}
         {{- if .ttl }}
         ttl: {{ .ttl }}
