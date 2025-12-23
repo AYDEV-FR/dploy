@@ -5,7 +5,6 @@ import (
 	"github.com/AYDEV-FR/dploy/internal/kube"
 	"github.com/AYDEV-FR/dploy/internal/models"
 	"github.com/gofiber/fiber/v2"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 type EnvironmentsHandler struct {
@@ -69,12 +68,7 @@ func (h *EnvironmentsHandler) ListUserEnvironments(c *fiber.Ctx) error {
 		labels := app.GetLabels()
 		annotations := app.GetAnnotations()
 
-		status := statusPending
-		if statusObj, found, err := unstructured.NestedMap(app.Object, "status", "health"); err == nil && found {
-			if healthStatus, ok := statusObj["status"].(string); ok {
-				status = healthStatus
-			}
-		}
+		status := GetAppStatus(&app)
 
 		envName := labels["dploy.dev/env"]
 		uuid := annotations["dploy.dev/uuid"]

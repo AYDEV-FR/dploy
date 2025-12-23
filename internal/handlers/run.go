@@ -11,7 +11,54 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-const statusPending = "pending"
+const (
+	statusPending  = "pending"
+	statusUnknown  = "Unknown"
+	statusSyncing  = "Syncing"
+	statusDeleting = "Deleting"
+	statusSynced   = "Synced"
+)
+
+// GetAppStatus returns the combined status of an ArgoCD application.
+// It checks sync status before returning health status:
+// - "Deleting" if the app has a deletion timestamp
+// - "Unknown" if sync status is Unknown or missing
+// - "Syncing" if sync status is OutOfSync
+// - Health status (Healthy, Progressing, Degraded, etc.) if synced
+func GetAppStatus(app *unstructured.Unstructured) string {
+	// Check if app is being deleted
+	if app.GetDeletionTimestamp() != nil {
+		return statusDeleting
+	}
+
+	// Get sync status
+	syncStatus := statusUnknown
+	if syncObj, found, err := unstructured.NestedMap(app.Object, "status", "sync"); err == nil && found {
+		if status, ok := syncObj["status"].(string); ok {
+			syncStatus = status
+		}
+	}
+
+	// If sync status is Unknown, return Unknown
+	if syncStatus == statusUnknown {
+		return statusUnknown
+	}
+
+	// If sync status is OutOfSync, return Syncing
+	if syncStatus != statusSynced {
+		return statusSyncing
+	}
+
+	// Sync is complete, return health status
+	healthStatus := statusPending
+	if healthObj, found, err := unstructured.NestedMap(app.Object, "status", "health"); err == nil && found {
+		if status, ok := healthObj["status"].(string); ok {
+			healthStatus = status
+		}
+	}
+
+	return healthStatus
+}
 
 type RunHandler struct {
 	kubeClient *kube.Client
@@ -129,13 +176,7 @@ func (h *RunHandler) GetStatus(c *fiber.Ctx) error {
 	uuid := annotations["dploy.dev/uuid"]
 	expiresAt := annotations["dploy.dev/expires-at"]
 
-	status := statusPending
-	if statusObj, found, err := unstructured.NestedMap(app.Object, "status", "health"); err == nil && found {
-		if healthStatus, ok := statusObj["status"].(string); ok {
-			status = healthStatus
-		}
-	}
-
+	status := GetAppStatus(app)
 	url := h.kubeClient.GenerateURL(username, uuid)
 
 	return c.JSON(models.StatusResponse{
@@ -241,13 +282,7 @@ func (h *RunHandler) buildResponseFromApp(c *fiber.Ctx, app *unstructured.Unstru
 	uuid := annotations["dploy.dev/uuid"]
 	expiresAt := annotations["dploy.dev/expires-at"]
 
-	status := statusPending
-	if statusObj, found, err := unstructured.NestedMap(app.Object, "status", "health"); err == nil && found {
-		if healthStatus, ok := statusObj["status"].(string); ok {
-			status = healthStatus
-		}
-	}
-
+	status := GetAppStatus(app)
 	url := h.kubeClient.GenerateURL(username, uuid)
 
 	return c.JSON(models.RunEnvironmentResponse{

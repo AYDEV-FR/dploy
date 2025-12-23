@@ -244,28 +244,33 @@ func (c *Client) DeleteApplication(ctx context.Context, appName string) error {
 	}
 
 	// Extract namespace from spec.destination.namespace
-	namespace, found, err := unstructured.NestedString(app.Object, "spec", "destination", "namespace")
-	if err != nil || !found {
-		// If we can't get the namespace, just delete the Application
-		return c.dynamic.Resource(applicationGVR).Namespace(c.config.ArgoCDNamespace).Delete(ctx, appName, metav1.DeleteOptions{})
+	namespace, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "namespace")
+
+	// Remove finalizers to prevent the application from being stuck in "Deleting" state
+	// This allows immediate deletion without waiting for ArgoCD to clean up resources
+	app.SetFinalizers(nil)
+	_, err = c.dynamic.Resource(applicationGVR).Namespace(c.config.ArgoCDNamespace).Update(ctx, app, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to remove finalizers: %w", err)
 	}
 
-	// Delete the Application first (this triggers ArgoCD to cleanup resources)
+	// Delete the Application
 	if err := c.dynamic.Resource(applicationGVR).Namespace(c.config.ArgoCDNamespace).Delete(ctx, appName, metav1.DeleteOptions{}); err != nil {
 		return err
 	}
 
-	// Delete the namespace after the Application is deleted
-	// This ensures proper cleanup of the namespace along with the Application
-	namespaceGVR := schema.GroupVersionResource{
-		Group:    "",
-		Version:  "v1",
-		Resource: "namespaces",
-	}
+	// Delete the namespace separately since we removed the ArgoCD finalizer
+	if namespace != "" {
+		namespaceGVR := schema.GroupVersionResource{
+			Group:    "",
+			Version:  "v1",
+			Resource: "namespaces",
+		}
 
-	// Ignore errors if namespace doesn't exist or is already being deleted.
-	//nolint:errcheck // Intentionally ignoring error - namespace may not exist or already be deleted
-	_ = c.dynamic.Resource(namespaceGVR).Delete(ctx, namespace, metav1.DeleteOptions{}) // #nosec G104
+		// Ignore errors if namespace doesn't exist or is already being deleted
+		//nolint:errcheck // Intentionally ignoring error - namespace may not exist or already be deleted
+		_ = c.dynamic.Resource(namespaceGVR).Delete(ctx, namespace, metav1.DeleteOptions{}) // #nosec G104
+	}
 
 	return nil
 }
