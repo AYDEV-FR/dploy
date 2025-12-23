@@ -35,8 +35,6 @@ func Middleware(validator *JWTValidator) fiber.Handler {
 			})
 		}
 
-		log.Printf("JWT validation successful for user: %s", username)
-
 		c.Locals(UserContextKey, username)
 		return c.Next()
 	}

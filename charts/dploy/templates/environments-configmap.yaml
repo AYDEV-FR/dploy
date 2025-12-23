@@ -17,7 +17,7 @@ data:
         {{- if .ttl }}
         ttl: {{ .ttl }}
         {{- end }}
-        {{- if .visible }}
+        {{- if hasKey . "visible" }}
         visible: {{ .visible }}
         {{- end }}
         {{- if .extraValues }}
