@@ -73,7 +73,7 @@ func (c *Client) GetEnvironment(name string) (*models.Environment, error) {
 func (c *Client) ListAvailableEnvironments() []models.Environment {
 	var available []models.Environment
 	for _, env := range c.config.Environments {
-		if env.Enabled {
+		if env.Enabled && env.IsVisible() {
 			available = append(available, env)
 		}
 	}

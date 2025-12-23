@@ -26,6 +26,7 @@ environments:
 | `description` | Yes | Human-readable description |
 | `chart` | Yes | Helm chart reference (see format below) |
 | `enabled` | Yes | Whether this environment is available |
+| `visible` | No | Show in UI/API listings (default: `true`). Hidden environments are still accessible via `/run/{name}` |
 | `icon` | No | Icon identifier for the Web UI |
 | `ttl` | No | TTL in seconds (overrides `DEFAULT_TTL`) |
 | `extraValues` | No | Additional Helm values (YAML string) |
@@ -149,13 +150,46 @@ environments:
     icon: "database"
     ttl: 172800  # 48 hours
 
-  # Disabled environment (hidden from users)
+  # Disabled environment (completely unavailable)
   - name: experimental
     description: "Experimental feature"
     chart: "github.com/AYDEV-FR/dploy-charts/charts/experimental@dev"
     enabled: false
     icon: "box"
+
+  # Hidden environment (not in listings, but accessible via /run/secret-lab)
+  - name: secret-lab
+    description: "Secret Lab Environment"
+    chart: "github.com/AYDEV-FR/dploy-charts/charts/kali@main"
+    enabled: true
+    visible: false
+    icon: "terminal"
+    ttl: 7200  # 2 hours
 ```
+
+## Hidden Environments
+
+Use `visible: false` to create environments that are:
+- **Not listed** in the UI or `/api/environments/available` endpoint
+- **Still accessible** via direct URL `/run/{name}` if the user knows the name
+
+This is useful for:
+- **Beta testing**: Share new environments with specific users
+- **Special access**: Provide environments to users who have the direct link
+- **Caching environments**: Pre-configured environments for specific use cases
+
+```yaml
+# Hidden environment example
+- name: ctf-challenge
+  description: "CTF Challenge Environment"
+  chart: "github.com/your-org/charts/ctf@main"
+  enabled: true
+  visible: false  # Not shown in listings
+  icon: "terminal"
+  ttl: 3600
+```
+
+Users can access it directly at `/run/ctf-challenge` but won't see it in the environment list.
 
 ## Helm Chart Requirements
 
