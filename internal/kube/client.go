@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/AYDEV-FR/dploy/internal/config"
+	"github.com/AYDEV-FR/dploy/internal/logger"
 	"github.com/AYDEV-FR/dploy/internal/models"
 	"github.com/google/uuid"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,6 +41,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	// Try in-cluster config first
 	restConfig, err = rest.InClusterConfig()
 	if err != nil {
+		logger.Debug("In-cluster config not available, falling back to kubeconfig")
 		// Fallback to kubeconfig
 		loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 		configOverrides := &clientcmd.ConfigOverrides{}
@@ -48,6 +50,9 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create kubernetes config: %w", err)
 		}
+		logger.Debug("Using kubeconfig for Kubernetes connection")
+	} else {
+		logger.Debug("Using in-cluster config for Kubernetes connection")
 	}
 
 	dynamicClient, err := dynamic.NewForConfig(restConfig)
@@ -132,6 +137,14 @@ func (c *Client) CreateApplication(ctx context.Context, username, envName string
 	namespace := fmt.Sprintf("%s-%s-%s", username, envName, shortUUID)
 	ingressHost := fmt.Sprintf("%s-%s.%s", username, shortUUID, c.config.BaseDomain)
 
+	logger.Debug("Creating ArgoCD application",
+		"appName", appName,
+		"namespace", namespace,
+		"ingressHost", ingressHost,
+		"ttl", ttl,
+		"expiresAt", expiresAtISO,
+	)
+
 	// Build base Helm values
 	helmValues := fmt.Sprintf("username: %s\nuuid: %s\ningressHost: %s", username, shortUUID, ingressHost)
 
@@ -144,6 +157,12 @@ func (c *Client) CreateApplication(ctx context.Context, username, envName string
 
 	// Parse chart string to get repo URL, path, and revision
 	repoURL, chartPath, chartRevision := env.ParseChart()
+	logger.Debug("Chart configuration",
+		"repoURL", repoURL,
+		"chartPath", chartPath,
+		"chartRevision", chartRevision,
+	)
+	logger.Debug("Helm values", "values", helmValues)
 
 	// Build Git source
 	source := map[string]interface{}{
@@ -237,25 +256,33 @@ func (c *Client) ExtendApplication(ctx context.Context, appName string) (time.Ti
 }
 
 func (c *Client) DeleteApplication(ctx context.Context, appName string) error {
+	logger.Debug("Deleting ArgoCD application", "appName", appName)
+
 	// Get the application first to extract the namespace
 	app, err := c.dynamic.Resource(applicationGVR).Namespace(c.config.ArgoCDNamespace).Get(ctx, appName, metav1.GetOptions{})
 	if err != nil {
+		logger.Error("Failed to get application", "appName", appName, "error", err)
 		return err
 	}
 
 	// Extract namespace from spec.destination.namespace
 	namespace, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "namespace")
+	logger.Debug("Application namespace", "appName", appName, "namespace", namespace)
 
 	// Remove finalizers to prevent the application from being stuck in "Deleting" state
 	// This allows immediate deletion without waiting for ArgoCD to clean up resources
+	logger.Debug("Removing finalizers", "appName", appName)
 	app.SetFinalizers(nil)
 	_, err = c.dynamic.Resource(applicationGVR).Namespace(c.config.ArgoCDNamespace).Update(ctx, app, metav1.UpdateOptions{})
 	if err != nil {
+		logger.Error("Failed to remove finalizers", "appName", appName, "error", err)
 		return fmt.Errorf("failed to remove finalizers: %w", err)
 	}
 
 	// Delete the Application
+	logger.Debug("Deleting ArgoCD application resource", "appName", appName)
 	if err := c.dynamic.Resource(applicationGVR).Namespace(c.config.ArgoCDNamespace).Delete(ctx, appName, metav1.DeleteOptions{}); err != nil {
+		logger.Error("Failed to delete application", "appName", appName, "error", err)
 		return err
 	}
 
@@ -267,11 +294,13 @@ func (c *Client) DeleteApplication(ctx context.Context, appName string) error {
 			Resource: "namespaces",
 		}
 
+		logger.Debug("Deleting namespace", "namespace", namespace)
 		// Ignore errors if namespace doesn't exist or is already being deleted
 		//nolint:errcheck // Intentionally ignoring error - namespace may not exist or already be deleted
 		_ = c.dynamic.Resource(namespaceGVR).Delete(ctx, namespace, metav1.DeleteOptions{}) // #nosec G104
 	}
 
+	logger.Debug("Successfully deleted application", "appName", appName)
 	return nil
 }
 

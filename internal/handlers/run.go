@@ -6,6 +6,7 @@ import (
 	"github.com/AYDEV-FR/dploy/internal/auth"
 	"github.com/AYDEV-FR/dploy/internal/config"
 	"github.com/AYDEV-FR/dploy/internal/kube"
+	"github.com/AYDEV-FR/dploy/internal/logger"
 	"github.com/AYDEV-FR/dploy/internal/models"
 	"github.com/gofiber/fiber/v2"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -88,14 +89,17 @@ func NewRunHandler(kubeClient *kube.Client, cfg *config.Config) *RunHandler {
 func (h *RunHandler) CreateEnvironment(c *fiber.Ctx) error {
 	username, ok := c.Locals(auth.UserContextKey).(string)
 	if !ok {
+		logger.Debug("Missing user context")
 		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
 			Error: "unauthorized: missing user context",
 		})
 	}
 	envName := c.Params("env")
+	logger.Debug("CreateEnvironment request", "user", username, "env", envName)
 
 	env, err := h.kubeClient.GetEnvironment(envName)
 	if err != nil {
+		logger.Debug("Environment not found", "env", envName, "error", err)
 		return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{
 			Error: err.Error(),
 		})
@@ -104,37 +108,49 @@ func (h *RunHandler) CreateEnvironment(c *fiber.Ctx) error {
 	// Check if already exists
 	existing, err := h.kubeClient.GetUserApplication(c.Context(), username, envName)
 	if err != nil {
+		logger.Error("Failed to get user application", "user", username, "env", envName, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
 			Error: err.Error(),
 		})
 	}
 
 	if existing != nil {
+		logger.Debug("Returning existing application", "user", username, "env", envName)
 		return h.buildResponseFromApp(c, existing, username)
 	}
 
 	// Check global quota
 	apps, err := h.kubeClient.ListUserApplications(c.Context(), username)
 	if err != nil {
+		logger.Error("Failed to list user applications", "user", username, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
 			Error: err.Error(),
 		})
 	}
 
+	logger.Debug("User environment count",
+		"user", username,
+		"current", len(apps.Items),
+		"max", h.config.MaxEnvironmentsPerUser,
+	)
 	if len(apps.Items) >= h.config.MaxEnvironmentsPerUser {
+		logger.Debug("Quota exceeded", "user", username)
 		return c.Status(fiber.StatusForbidden).JSON(models.ErrorResponse{
 			Error: fmt.Sprintf("Maximum %d environments allowed", h.config.MaxEnvironmentsPerUser),
 		})
 	}
 
 	// Create new application
+	logger.Debug("Creating new application", "user", username, "env", envName)
 	app, err := h.kubeClient.CreateApplication(c.Context(), username, envName, env)
 	if err != nil {
+		logger.Error("Failed to create application", "user", username, "env", envName, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
 			Error: err.Error(),
 		})
 	}
 
+	logger.Info("Created application", "user", username, "env", envName)
 	return h.buildResponseFromApp(c, app, username)
 }
 
@@ -153,20 +169,24 @@ func (h *RunHandler) CreateEnvironment(c *fiber.Ctx) error {
 func (h *RunHandler) GetStatus(c *fiber.Ctx) error {
 	username, ok := c.Locals(auth.UserContextKey).(string)
 	if !ok {
+		logger.Debug("Missing user context")
 		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
 			Error: "unauthorized: missing user context",
 		})
 	}
 	envName := c.Params("env")
+	logger.Debug("GetStatus request", "user", username, "env", envName)
 
 	app, err := h.kubeClient.GetUserApplication(c.Context(), username, envName)
 	if err != nil {
+		logger.Error("Failed to get user application", "user", username, "env", envName, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
 			Error: err.Error(),
 		})
 	}
 
 	if app == nil {
+		logger.Debug("Environment not found", "user", username, "env", envName)
 		return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{
 			Error: fmt.Sprintf("Environment %s not found", envName),
 		})
@@ -178,6 +198,14 @@ func (h *RunHandler) GetStatus(c *fiber.Ctx) error {
 
 	status := GetAppStatus(app)
 	url := h.kubeClient.GenerateURL(username, uuid)
+
+	logger.Debug("GetStatus response",
+		"user", username,
+		"env", envName,
+		"status", status,
+		"uuid", uuid,
+		"expiresAt", expiresAt,
+	)
 
 	return c.JSON(models.StatusResponse{
 		UUID:      uuid,
@@ -202,20 +230,24 @@ func (h *RunHandler) GetStatus(c *fiber.Ctx) error {
 func (h *RunHandler) ExtendTTL(c *fiber.Ctx) error {
 	username, ok := c.Locals(auth.UserContextKey).(string)
 	if !ok {
+		logger.Debug("Missing user context")
 		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
 			Error: "unauthorized: missing user context",
 		})
 	}
 	envName := c.Params("env")
+	logger.Debug("ExtendTTL request", "user", username, "env", envName)
 
 	app, err := h.kubeClient.GetUserApplication(c.Context(), username, envName)
 	if err != nil {
+		logger.Error("Failed to get user application", "user", username, "env", envName, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
 			Error: err.Error(),
 		})
 	}
 
 	if app == nil {
+		logger.Debug("Environment not found", "user", username, "env", envName)
 		return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{
 			Error: fmt.Sprintf("Environment %s not found", envName),
 		})
@@ -224,13 +256,17 @@ func (h *RunHandler) ExtendTTL(c *fiber.Ctx) error {
 	appName := app.GetName()
 	newExpires, err := h.kubeClient.ExtendApplication(c.Context(), appName)
 	if err != nil {
+		logger.Error("Failed to extend application", "appName", appName, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
 			Error: err.Error(),
 		})
 	}
 
+	expiresAt := newExpires.UTC().Format("2006-01-02T15:04:05Z07:00")
+	logger.Info("Extended TTL", "user", username, "env", envName, "newExpires", expiresAt)
+
 	return c.JSON(models.ExtendResponse{
-		ExpiresAt: newExpires.UTC().Format("2006-01-02T15:04:05Z07:00"), // Return ISO 8601 format
+		ExpiresAt: expiresAt,
 	})
 }
 
@@ -248,32 +284,39 @@ func (h *RunHandler) ExtendTTL(c *fiber.Ctx) error {
 func (h *RunHandler) DeleteEnvironment(c *fiber.Ctx) error {
 	username, ok := c.Locals(auth.UserContextKey).(string)
 	if !ok {
+		logger.Debug("Missing user context")
 		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
 			Error: "unauthorized: missing user context",
 		})
 	}
 	envName := c.Params("env")
+	logger.Debug("DeleteEnvironment request", "user", username, "env", envName)
 
 	app, err := h.kubeClient.GetUserApplication(c.Context(), username, envName)
 	if err != nil {
+		logger.Error("Failed to get user application", "user", username, "env", envName, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
 			Error: err.Error(),
 		})
 	}
 
 	if app == nil {
+		logger.Debug("Environment not found", "user", username, "env", envName)
 		return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{
 			Error: fmt.Sprintf("Environment %s not found", envName),
 		})
 	}
 
 	appName := app.GetName()
+	logger.Debug("Deleting application", "appName", appName)
 	if err := h.kubeClient.DeleteApplication(c.Context(), appName); err != nil {
+		logger.Error("Failed to delete application", "appName", appName, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
 			Error: err.Error(),
 		})
 	}
 
+	logger.Info("Deleted application", "user", username, "env", envName)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 

@@ -41,6 +41,9 @@ type Config struct {
 	ServerHost string
 	ServerPort string
 
+	// Debug
+	Debug bool
+
 	// Environments
 	Environments []models.Environment
 }
@@ -76,6 +79,9 @@ func Load(environmentsPath string) (*Config, error) {
 		// Server
 		ServerHost: getEnv("SERVER_HOST", "0.0.0.0"),
 		ServerPort: getEnv("SERVER_PORT", "8080"),
+
+		// Debug
+		Debug: getEnvAsBool("DEBUG", false),
 	}
 
 	if cfg.JWKSUrl == "" {
@@ -116,6 +122,18 @@ func getEnvAsInt(key string, defaultValue int) int {
 		return defaultValue
 	}
 	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+func getEnvAsBool(key string, defaultValue bool) bool {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseBool(valueStr)
 	if err != nil {
 		return defaultValue
 	}
