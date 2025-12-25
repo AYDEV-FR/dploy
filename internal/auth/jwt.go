@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/AYDEV-FR/dploy/internal/logger"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -46,6 +47,8 @@ func NewJWTValidator(jwksURL, issuer, audience, usernameClaim string) *JWTValida
 }
 
 func (v *JWTValidator) fetchJWKS() error {
+	logger.Debug("Fetching JWKS", "url", v.jwksURL)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -56,12 +59,14 @@ func (v *JWTValidator) fetchJWKS() error {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Error("Failed to fetch JWKS", "url", v.jwksURL, "error", err)
 		return fmt.Errorf("failed to fetch JWKS: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var jwks JWKS
 	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+		logger.Error("Failed to decode JWKS", "error", err)
 		return fmt.Errorf("failed to decode JWKS: %w", err)
 	}
 
@@ -70,6 +75,7 @@ func (v *JWTValidator) fetchJWKS() error {
 	v.lastFetch = time.Now()
 	v.cacheMu.Unlock()
 
+	logger.Debug("Fetched JWKS", "keyCount", len(jwks.Keys))
 	return nil
 }
 
@@ -95,16 +101,21 @@ func (v *JWTValidator) getJWKS() (*JWKS, error) {
 
 //nolint:gocyclo // Complexity is necessary for proper JWT validation with multiple security checks
 func (v *JWTValidator) ValidateToken(tokenString string) (string, error) {
+	logger.Debug("Validating JWT token")
+
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		// Check signing method
 		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			logger.Debug("Unexpected signing method", "alg", token.Header["alg"])
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 
 		kid, ok := token.Header["kid"].(string)
 		if !ok {
+			logger.Debug("Missing kid in token header")
 			return nil, fmt.Errorf("missing kid in token header")
 		}
+		logger.Debug("Token kid", "kid", kid)
 
 		jwks, err := v.getJWKS()
 		if err != nil {
@@ -120,6 +131,7 @@ func (v *JWTValidator) ValidateToken(tokenString string) (string, error) {
 		}
 
 		if jwk == nil {
+			logger.Debug("Key not found in JWKS", "kid", kid, "keyCount", len(jwks.Keys))
 			return nil, fmt.Errorf("key %s not found in JWKS (have %d keys)", kid, len(jwks.Keys))
 		}
 
@@ -133,39 +145,49 @@ func (v *JWTValidator) ValidateToken(tokenString string) (string, error) {
 	})
 
 	if err != nil {
+		logger.Debug("Token parsing failed", "error", err)
 		return "", fmt.Errorf("token parsing failed: %w", err)
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok || !token.Valid {
+		logger.Debug("Invalid token claims")
 		return "", fmt.Errorf("invalid token claims")
 	}
 
 	// Validate issuer
 	iss, ok := claims["iss"].(string)
 	if !ok {
+		logger.Debug("Missing iss claim")
 		return "", fmt.Errorf("missing iss claim")
 	}
 	if iss != v.issuer {
+		logger.Debug("Invalid issuer", "expected", v.issuer, "got", iss)
 		return "", fmt.Errorf("invalid issuer: expected %s, got %s", v.issuer, iss)
 	}
 
 	// Validate audience
 	aud, ok := claims["aud"].(string)
 	if !ok {
+		logger.Debug("Missing aud claim")
 		return "", fmt.Errorf("missing aud claim")
 	}
 	if aud != v.audience {
+		logger.Debug("Invalid audience", "expected", v.audience, "got", aud)
 		return "", fmt.Errorf("invalid audience: expected %s, got %s", v.audience, aud)
 	}
 
 	// Extract username
 	username, ok := claims[v.usernameClaim].(string)
 	if !ok {
+		logger.Debug("Missing or invalid username claim", "claim", v.usernameClaim)
 		return "", fmt.Errorf("missing or invalid %s claim", v.usernameClaim)
 	}
 
-	return SanitizeUsername(username), nil
+	sanitizedUsername := SanitizeUsername(username)
+	logger.Debug("Token validated", "user", sanitizedUsername, "rawUser", username)
+
+	return sanitizedUsername, nil
 }
 
 // jwkToRSAPublicKey converts a JWK to an RSA public key.

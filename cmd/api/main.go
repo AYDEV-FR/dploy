@@ -3,16 +3,16 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
 
 	"github.com/AYDEV-FR/dploy/internal/auth"
 	"github.com/AYDEV-FR/dploy/internal/cleanup"
 	"github.com/AYDEV-FR/dploy/internal/config"
 	"github.com/AYDEV-FR/dploy/internal/handlers"
 	"github.com/AYDEV-FR/dploy/internal/kube"
+	"github.com/AYDEV-FR/dploy/internal/logger"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/logger"
+	fiberlogger "github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 )
 
@@ -20,18 +20,25 @@ func main() {
 	// Load configuration
 	cfg, err := config.Load("config/environments.yaml")
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		panic("Failed to load configuration: " + err.Error())
 	}
 
-	log.Printf("Configuration loaded - ArgoCD namespace: %s, Project: %s", cfg.ArgoCDNamespace, cfg.ArgoCDProject)
+	// Initialize logger with debug mode
+	logger.Init(cfg.Debug)
+	defer logger.Sync()
+
+	logger.Info("Configuration loaded",
+		"argocdNamespace", cfg.ArgoCDNamespace,
+		"argocdProject", cfg.ArgoCDProject,
+	)
 
 	// Initialize Kubernetes client
 	kubeClient, err := kube.NewClient(cfg)
 	if err != nil {
-		log.Fatalf("Failed to create Kubernetes client: %v", err)
+		logger.Fatal("Failed to create Kubernetes client", "error", err)
 	}
 
-	log.Println("Kubernetes client initialized")
+	logger.Info("Kubernetes client initialized")
 
 	// Start TTL cleanup worker
 	cleanupWorker := cleanup.NewWorker(kubeClient, cfg.CleanupInterval)
@@ -39,15 +46,24 @@ func main() {
 
 	// Initialize JWT validator
 	jwtValidator := auth.NewJWTValidator(cfg.JWKSUrl, cfg.JWTIssuer, cfg.JWTAudience, cfg.JWTUsernameClaim)
-	log.Printf("JWT validator initialized with JWKS URL: %s", cfg.JWKSUrl)
+	logger.Info("JWT validator initialized", "jwksURL", cfg.JWKSUrl)
+	logger.Debug("JWT settings",
+		"issuer", cfg.JWTIssuer,
+		"audience", cfg.JWTAudience,
+		"usernameClaim", cfg.JWTUsernameClaim,
+	)
 
 	// Initialize OIDC handler
 	oidcHandler, err := auth.NewOIDCHandler(cfg)
 	if err != nil {
-		log.Printf("Warning: OIDC handler initialization failed: %v", err)
-		log.Println("OIDC login will not be available")
+		logger.Warn("OIDC handler initialization failed", "error", err)
+		logger.Info("OIDC login will not be available")
 	} else {
-		log.Printf("OIDC handler initialized with issuer: %s", cfg.OIDCIssuer)
+		logger.Info("OIDC handler initialized", "issuer", cfg.OIDCIssuer)
+		logger.Debug("OIDC settings",
+			"clientID", cfg.OIDCClientID,
+			"redirectURL", cfg.OIDCRedirectURL,
+		)
 	}
 
 	// Initialize handlers
@@ -71,7 +87,7 @@ func main() {
 
 	// Middleware
 	app.Use(recover.New())
-	app.Use(logger.New())
+	app.Use(fiberlogger.New())
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "*",
 		AllowMethods: "GET,POST,DELETE,OPTIONS",
@@ -113,9 +129,14 @@ func main() {
 
 	// Start server
 	addr := cfg.ServerHost + ":" + cfg.ServerPort
-	log.Printf("Starting server on %s", addr)
+	logger.Info("Starting server", "addr", addr)
+	logger.Debug("Server configuration",
+		"host", cfg.ServerHost,
+		"port", cfg.ServerPort,
+		"baseDomain", cfg.BaseDomain,
+	)
 
 	if err := app.Listen(addr); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+		logger.Fatal("Failed to start server", "error", err)
 	}
 }

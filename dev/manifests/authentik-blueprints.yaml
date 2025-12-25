@@ -32,7 +32,7 @@ data:
           include_claims_in_id_token: true
           issuer_mode: per_provider
           # Use RSA signing key for JWT (required for JWKS validation)
-          signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Internal JWT Certificate]]
+          signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
 
       # Policy to allow all authenticated users (not just internal users)
       - model: authentik_policies_expression.expressionpolicy
