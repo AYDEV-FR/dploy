@@ -21,14 +21,14 @@ window.addEventListener('DOMContentLoaded', () => {
         console.log('Token found in hash, storing in localStorage');
         localStorage.setItem(TOKEN_KEY, token);
         // Clean URL
-        window.history.replaceState({}, document.title, '/');
+        window.history.replaceState({}, document.title, window.location.pathname);
     }
 
     // Check if user has token
     const token = localStorage.getItem(TOKEN_KEY);
     if (token) {
         showMainContent();
-        loadEnvironments();
+        loadPageContent();
     } else {
         showLoginForm();
     }
@@ -64,6 +64,17 @@ function showMainContent() {
         document.getElementById('username').textContent = username;
     } catch (e) {
         document.getElementById('username').textContent = 'User';
+    }
+}
+
+// Load page-specific content
+function loadPageContent() {
+    const page = window.currentPage || 'environments';
+
+    if (page === 'catalog') {
+        loadAvailableEnvironments();
+    } else {
+        loadUserEnvironments();
     }
 }
 
@@ -111,23 +122,18 @@ async function apiCall(endpoint, options = {}) {
     }
 }
 
-// Load Environments
-async function loadEnvironments() {
-    await Promise.all([
-        loadAvailableEnvironments(),
-        loadUserEnvironments()
-    ]);
-}
-
+// Load Available Environments (Catalog)
 async function loadAvailableEnvironments() {
     const container = document.getElementById('available-environments');
+    if (!container) return;
+
     container.innerHTML = '<p class="loading">Loading...</p>';
 
     try {
         const envs = await apiCall('/api/environments/available');
 
         if (!envs || envs.length === 0) {
-            container.innerHTML = '<p class="empty-state">No environments available</p>';
+            container.innerHTML = '<p class="empty-state">No templates available</p>';
             return;
         }
 
@@ -148,13 +154,17 @@ async function loadAvailableEnvironments() {
             </div>
         `).join('');
     } catch (error) {
-        container.innerHTML = '<p class="error-state">⚠️ Failed to load environments</p>';
+        container.innerHTML = '<p class="error-state">Failed to load templates</p>';
     }
 }
 
+// Load User Environments
 async function loadUserEnvironments() {
     const container = document.getElementById('active-environments');
     const counterElement = document.getElementById('env-counter');
+
+    if (!container) return;
+
     container.innerHTML = '<p class="loading">Loading...</p>';
 
     try {
@@ -175,7 +185,14 @@ async function loadUserEnvironments() {
         }
 
         if (!data.environments || data.environments.length === 0) {
-            container.innerHTML = '<p class="empty-state">🚀 No active environments yet. Launch one below!</p>';
+            container.innerHTML = `
+                <div class="empty-state">
+                    <p>No active environments yet</p>
+                    <a href="/catalog" class="btn-nav" style="display: inline-block; margin-top: 1rem;">
+                        Browse Catalog
+                    </a>
+                </div>
+            `;
             return;
         }
 
@@ -238,7 +255,7 @@ async function loadUserEnvironments() {
             `;
         }).join('');
     } catch (error) {
-        container.innerHTML = '<p class="error-state">⚠️ Failed to load your environments</p>';
+        container.innerHTML = '<p class="error-state">Failed to load your environments</p>';
     }
 }
 
@@ -249,6 +266,14 @@ async function launchEnvironment(name) {
     try {
         const result = await apiCall(`/api/run/${name}`);
         showToast(`Environment ${name} is ${result.status}`, 'success');
+
+        // Redirect to environments page if on catalog
+        if (window.currentPage === 'catalog') {
+            setTimeout(() => {
+                window.location.href = '/';
+            }, 1000);
+            return;
+        }
 
         // Wait a bit and reload if pending
         if (result.status === 'pending') {

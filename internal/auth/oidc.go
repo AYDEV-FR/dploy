@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/AYDEV-FR/dploy/internal/config"
+	"github.com/AYDEV-FR/dploy/internal/logger"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -63,7 +64,7 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 		return nil, fmt.Errorf("failed to discover OIDC endpoints from %s: %w", cfg.OIDCIssuer, err)
 	}
 	handler.discovery = discovery
-	fmt.Printf("OIDC Discovery (internal): token=%s\n", discovery.TokenEndpoint)
+	logger.Info("OIDC discovery completed (internal)", "tokenEndpoint", discovery.TokenEndpoint)
 
 	// If public issuer is different, create public discovery by replacing the server base URL.
 	// This handles cases where the pod can't access the public URL directly.
@@ -76,8 +77,11 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 			publicBase := extractBaseURL(cfg.OIDCPublicIssuer)
 
 			// Construct public URLs by replacing internal base with public base.
-			fmt.Printf("Warning: failed to discover OIDC from public issuer %s: %v\n", cfg.OIDCPublicIssuer, err)
-			fmt.Printf("Constructing public URLs from internal discovery (replacing %s with %s)...\n", internalBase, publicBase)
+			logger.Warn("Failed to discover OIDC from public issuer, constructing URLs from internal discovery",
+				"publicIssuer", cfg.OIDCPublicIssuer,
+				"error", err,
+				"internalBase", internalBase,
+				"publicBase", publicBase)
 			handler.publicDiscovery = &OIDCDiscovery{
 				Issuer:                strings.Replace(discovery.Issuer, internalBase, publicBase, 1),
 				AuthorizationEndpoint: strings.Replace(discovery.AuthorizationEndpoint, internalBase, publicBase, 1),
@@ -86,10 +90,10 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 				JwksURI:               strings.Replace(discovery.JwksURI, internalBase, publicBase, 1),
 				EndSessionEndpoint:    strings.Replace(discovery.EndSessionEndpoint, internalBase, publicBase, 1),
 			}
-			fmt.Printf("OIDC Discovery (public, constructed): auth=%s\n", handler.publicDiscovery.AuthorizationEndpoint)
+			logger.Info("OIDC discovery completed (public, constructed)", "authEndpoint", handler.publicDiscovery.AuthorizationEndpoint)
 		} else {
 			handler.publicDiscovery = publicDiscovery
-			fmt.Printf("OIDC Discovery (public): auth=%s\n", publicDiscovery.AuthorizationEndpoint)
+			logger.Info("OIDC discovery completed (public)", "authEndpoint", publicDiscovery.AuthorizationEndpoint)
 		}
 	} else {
 		handler.publicDiscovery = discovery
@@ -204,17 +208,20 @@ func (h *OIDCHandler) Login(c *fiber.Ctx) error {
 	// Get returnUrl from query parameter (optional).
 	returnURL := c.Query("returnUrl", "/")
 
-	fmt.Printf("OIDC login: returnUrl='%s', fullURL='%s', queryString='%s'\n", returnURL, c.OriginalURL(), string(c.Request().URI().QueryString()))
+	logger.Debug("OIDC login initiated",
+		"returnUrl", returnURL,
+		"fullURL", c.OriginalURL(),
+		"queryString", string(c.Request().URI().QueryString()))
 
 	// Validate returnUrl - must be a relative path starting with /
 	// This prevents open redirect vulnerabilities and invalid paths
 	if !strings.HasPrefix(returnURL, "/") {
-		fmt.Printf("OIDC login: invalid returnUrl '%s', defaulting to '/'\n", returnURL)
+		logger.Warn("OIDC login: invalid returnUrl, defaulting to /", "returnUrl", returnURL)
 		returnURL = "/"
 	}
 
 	state := h.generateState(returnURL)
-	fmt.Printf("OIDC login: stored returnUrl '%s' with state\n", returnURL)
+	logger.Debug("OIDC login: stored returnUrl with state", "returnUrl", returnURL)
 
 	params := url.Values{}
 	params.Set("client_id", h.config.OIDCClientID)
@@ -278,15 +285,15 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 	returnURL := "/"
 	if stateData != nil && stateData.ReturnURL != "" {
 		returnURL = stateData.ReturnURL
-		fmt.Printf("OIDC callback: retrieved returnURL from state: '%s'\n", returnURL)
+		logger.Debug("OIDC callback: retrieved returnURL from state", "returnUrl", returnURL)
 	} else {
-		fmt.Printf("OIDC callback: no returnURL in state, using default '/'\n")
+		logger.Debug("OIDC callback: no returnURL in state, using default /")
 	}
 
 	// Ensure returnURL is a valid absolute path (starts with /)
 	// This prevents redirect issues from corrupted state data
 	if !strings.HasPrefix(returnURL, "/") {
-		fmt.Printf("OIDC callback: invalid returnURL '%s' (no leading /), defaulting to '/'\n", returnURL)
+		logger.Warn("OIDC callback: invalid returnURL, defaulting to /", "returnUrl", returnURL)
 		returnURL = "/"
 	}
 
@@ -294,7 +301,7 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 	// This is more secure than query params and prevents token leakage in server logs.
 	redirectURL := fmt.Sprintf("%s#token=%s", returnURL, tokenToUse)
 
-	fmt.Printf("OIDC callback: redirecting to %s with token in hash (length: %d)\n", returnURL, len(tokenToUse))
+	logger.Debug("OIDC callback: redirecting with token", "returnUrl", returnURL, "tokenLength", len(tokenToUse))
 
 	return c.Redirect(redirectURL, fiber.StatusFound)
 }

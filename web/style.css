@@ -60,6 +60,13 @@ body {
     font-weight: 700;
 }
 
+.brand-link {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    text-decoration: none;
+}
+
 .brand-icon {
     font-size: 2rem;
 }
@@ -69,6 +76,44 @@ body {
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+}
+
+/* Nav Links */
+.nav-links {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.nav-link {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 1rem;
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.95rem;
+    font-weight: 500;
+    border-radius: 8px;
+    transition: all 0.2s;
+}
+
+.nav-link:hover {
+    color: var(--text);
+    background: var(--surface-hover);
+}
+
+.nav-link.active {
+    color: var(--primary);
+    background: var(--primary-light);
+}
+
+.nav-link svg {
+    opacity: 0.7;
+}
+
+.nav-link.active svg {
+    opacity: 1;
 }
 
 .nav-menu {
@@ -146,6 +191,10 @@ body {
     border-bottom: 1px solid var(--border);
 }
 
+.hero.hero-small {
+    padding: 2.5rem 0 2rem;
+}
+
 .hero-title {
     font-size: 3.5rem;
     font-weight: 800;
@@ -157,11 +206,19 @@ body {
     letter-spacing: -0.02em;
 }
 
+.hero.hero-small .hero-title {
+    font-size: 2.5rem;
+}
+
 .hero-subtitle {
     font-size: 1.25rem;
     color: var(--text-secondary);
     max-width: 600px;
     margin: 0 auto;
+}
+
+.hero.hero-small .hero-subtitle {
+    font-size: 1.1rem;
 }
 
 /* Container */
@@ -749,6 +806,27 @@ body {
 @media (max-width: 768px) {
     .nav-container {
         padding: 1rem;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+    }
+
+    .nav-links {
+        order: 3;
+        width: 100%;
+        justify-content: center;
+        border-top: 1px solid var(--border);
+        padding-top: 0.75rem;
+        margin-top: 0.25rem;
+    }
+
+    .nav-link {
+        padding: 0.5rem 0.75rem;
+        font-size: 0.875rem;
+    }
+
+    .nav-link svg {
+        width: 16px;
+        height: 16px;
     }
 
     .container {
@@ -759,8 +837,16 @@ body {
         padding: 3rem 0 2rem;
     }
 
+    .hero.hero-small {
+        padding: 2rem 0 1.5rem;
+    }
+
     .hero-title {
         font-size: 2.5rem;
+    }
+
+    .hero.hero-small .hero-title {
+        font-size: 1.75rem;
     }
 
     .hero-subtitle {

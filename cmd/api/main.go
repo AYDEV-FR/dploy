@@ -99,6 +99,9 @@ func main() {
 	app.Get("/", func(c *fiber.Ctx) error {
 		return c.SendFile("./web/index.html")
 	})
+	app.Get("/catalog", func(c *fiber.Ctx) error {
+		return c.SendFile("./web/catalog.html")
+	})
 
 	// Health endpoints (no auth)
 	app.Get("/health", healthHandler.Health)
