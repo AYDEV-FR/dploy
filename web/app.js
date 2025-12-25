@@ -147,9 +147,9 @@ async function loadAvailableEnvironments() {
                 </div>
                 <div class="env-description">${env.description}</div>
                 <div class="env-actions">
-                    <button onclick="launchEnvironment('${env.name}')" class="btn-small btn-primary">
+                    <a href="/run/${env.name}" class="btn-small btn-primary">
                         🚀 Launch
-                    </button>
+                    </a>
                 </div>
             </div>
         `).join('');
