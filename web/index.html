@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dploy - Ephemeral Environments</title>
+    <title>Dploy - My Environments</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -11,8 +11,28 @@
     <nav class="navbar">
         <div class="nav-container">
             <div class="nav-brand">
-                <span class="brand-icon">🚀</span>
-                <span class="brand-name">Dploy.dev</span>
+                <a href="/" class="brand-link">
+                    <span class="brand-icon">🚀</span>
+                    <span class="brand-name">Dploy.dev</span>
+                </a>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link active">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7"/>
+                        <rect x="14" y="3" width="7" height="7"/>
+                        <rect x="14" y="14" width="7" height="7"/>
+                        <rect x="3" y="14" width="7" height="7"/>
+                    </svg>
+                    My Environments
+                </a>
+                <a href="/catalog" class="nav-link">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                    </svg>
+                    Catalog
+                </a>
             </div>
             <div class="nav-menu">
                 <div id="login-form" style="display: none;">
@@ -30,10 +50,10 @@
     </nav>
 
     <!-- Hero Section -->
-    <div class="hero">
+    <div class="hero hero-small">
         <div class="container">
-            <h1 class="hero-title">Launch Ephemeral Environments</h1>
-            <p class="hero-subtitle">Deploy temporary development environments in seconds</p>
+            <h1 class="hero-title">My Environments</h1>
+            <p class="hero-subtitle">Manage your running development environments</p>
         </div>
     </div>
 
@@ -49,27 +69,17 @@
                     </div>
                     <div class="section-actions">
                         <div id="env-counter" class="env-counter"></div>
-                        <button onclick="loadEnvironments()" class="btn-refresh" title="Refresh">
+                        <button onclick="loadUserEnvironments()" class="btn-refresh" title="Refresh">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
                             </svg>
                         </button>
+                        <a href="/catalog" class="btn-nav btn-small">
+                            + New Environment
+                        </a>
                     </div>
                 </div>
                 <div id="active-environments" class="env-list">
-                    <p class="loading">Loading...</p>
-                </div>
-            </section>
-
-            <!-- Available Environments Section -->
-            <section class="section">
-                <div class="section-header">
-                    <div class="section-title">
-                        <h2>Available Templates</h2>
-                        <p class="section-description">Choose an environment to deploy</p>
-                    </div>
-                </div>
-                <div id="available-environments" class="env-grid">
                     <p class="loading">Loading...</p>
                 </div>
             </section>
@@ -90,5 +100,9 @@
     <div id="toast" class="toast"></div>
 
     <script src="/static/app.js"></script>
+    <script>
+        // Page-specific initialization
+        window.currentPage = 'environments';
+    </script>
 </body>
 </html>

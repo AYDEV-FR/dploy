@@ -2,10 +2,10 @@ package cleanup
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/AYDEV-FR/dploy/internal/kube"
+	"github.com/AYDEV-FR/dploy/internal/logger"
 )
 
 // Worker handles TTL-based cleanup of expired environments.
@@ -24,7 +24,7 @@ func NewWorker(kubeClient *kube.Client, intervalSeconds int) *Worker {
 
 // Start begins the cleanup worker loop.
 func (w *Worker) Start(ctx context.Context) {
-	log.Printf("Starting TTL cleanup worker with interval: %v", w.interval)
+	logger.Info("Starting TTL cleanup worker", "interval", w.interval)
 
 	// Run immediately on start
 	w.cleanupExpired(ctx)
@@ -35,7 +35,7 @@ func (w *Worker) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Cleanup worker stopped")
+			logger.Info("Cleanup worker stopped")
 			return
 		case <-ticker.C:
 			w.cleanupExpired(ctx)
@@ -47,7 +47,7 @@ func (w *Worker) Start(ctx context.Context) {
 func (w *Worker) cleanupExpired(ctx context.Context) {
 	apps, err := w.kubeClient.ListAllDployApplications(ctx)
 	if err != nil {
-		log.Printf("Cleanup worker: failed to list applications: %v", err)
+		logger.Error("Cleanup worker: failed to list applications", "error", err)
 		return
 	}
 
@@ -63,25 +63,25 @@ func (w *Worker) cleanupExpired(ctx context.Context) {
 
 		expiresAt, err := time.Parse(time.RFC3339, expiresAtStr)
 		if err != nil {
-			log.Printf("Cleanup worker: failed to parse expires-at for %s: %v", app.GetName(), err)
+			logger.Error("Cleanup worker: failed to parse expires-at", "app", app.GetName(), "error", err)
 			continue
 		}
 
 		if now.After(expiresAt) {
 			appName := app.GetName()
-			log.Printf("Cleanup worker: deleting expired environment %s (expired at %s)", appName, expiresAtStr)
+			logger.Info("Cleanup worker: deleting expired environment", "app", appName, "expiredAt", expiresAtStr)
 
 			if err := w.kubeClient.DeleteApplication(ctx, appName); err != nil {
-				log.Printf("Cleanup worker: failed to delete %s: %v", appName, err)
+				logger.Error("Cleanup worker: failed to delete application", "app", appName, "error", err)
 				continue
 			}
 
 			expiredCount++
-			log.Printf("Cleanup worker: successfully deleted %s", appName)
+			logger.Info("Cleanup worker: successfully deleted application", "app", appName)
 		}
 	}
 
 	if expiredCount > 0 {
-		log.Printf("Cleanup worker: deleted %d expired environment(s)", expiredCount)
+		logger.Info("Cleanup worker: cleanup cycle completed", "deletedCount", expiredCount)
 	}
 }
