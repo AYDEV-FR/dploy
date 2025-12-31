@@ -54,6 +54,7 @@ data:
         enabled: true
         icon: "terminal"
         ttl: 300
+        category: terminal
         # Example with extraValues and variable replacement
         # Supported variables: ${username}, ${user}, ${uuid}, ${ingressHost}, ${ingress}
         extraValues: |
@@ -79,6 +80,7 @@ data:
         enabled: true
         icon: "terminal"
         ttl: 300
+        category: terminal
         extraValues: |
           container:
             image:
@@ -102,6 +104,7 @@ data:
         enabled: true
         icon: "terminal"
         ttl: 300
+        category: terminal
         extraValues: |
           container:
             image:
@@ -122,9 +125,10 @@ data:
       - name: kali-desktop
         description: "Kali Desktop"
         chart: "github.com/AYDEV-FR/dploy-charts/kasm@main"
-        enabled: true
+        enabled: false
         icon: "box"
         ttl: 300
+        category: desktop
         extraValues: |
           image:
             repository: kasmweb/core-kali-rolling
@@ -147,6 +151,7 @@ data:
         enabled: true
         icon: "box"
         ttl: 300
+        category: desktop
         extraValues: |
           image:
             repository: kasmweb/ubuntu-noble-desktop
@@ -169,6 +174,7 @@ data:
         enabled: true
         icon: "web"
         ttl: 300
+        category: desktop
         extraValues: |
           image:
             repository: kasmweb/chromium
@@ -190,7 +196,65 @@ data:
         chart: "github.com/AYDEV-FR/dploy-charts/vscode@main"
         enabled: true
         icon: "book"
-        ttl: 300
+        ttl: "300,3600"
+        extraValues: |
+          ingress:
+            enabled: true
+            className: "nginx"
+            hosts:
+              - host: ${ingressHost}
+                paths:
+                  - path: /
+                    pathType: ImplementationSpecific
+            tls: []
+
+      - name: learning-linux
+        description: "learning-linux"
+        chart: "github.com/AYDEV-FR/learning-ui/chart@main"
+        enabled: true
+        icon: "book"
+        ttl: "-1"
+        category: learning,linux
+        extraValues: |
+          ingress:
+            enabled: true
+            className: "nginx"
+            hosts:
+              - host: ${ingressHost}
+                paths:
+                  - path: /
+                    pathType: ImplementationSpecific
+            tls: []
+
+      - name: learning-kubernetes
+        description: "learning-kuberentes"
+        chart: "github.com/AYDEV-FR/learning-ui/chart@main"
+        enabled: true
+        icon: "book"
+        ttl: "300,3600,2"
+        category: learning,kubernetes
+        valueFiles:
+          - kubernetes01.values.yaml
+        extraValues: |
+          ingress:
+            enabled: true
+            className: "nginx"
+            hosts:
+              - host: ${ingressHost}
+                paths:
+                  - path: /
+                    pathType: ImplementationSpecific
+            tls: []
+
+      - name: learning-git
+        description: "learning-kuberentes"
+        chart: "github.com/AYDEV-FR/learning-ui/chart@main"
+        enabled: true
+        icon: "book"
+        ttl: "300,300,1"
+        category: learning,git
+        valueFiles:
+          - git.values.yaml
         extraValues: |
           ingress:
             enabled: true

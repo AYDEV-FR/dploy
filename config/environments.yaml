@@ -1,19 +1,28 @@
 environments:
   # Git-based Helm chart examples
   # Format: github.com/org/repo/path/to/chart@revision
+  # Category format: "category,subcategory" (e.g., "learning,linux")
+  # TTL format: "seconds" or "seconds,extendSeconds,maxExtends" or "-1" (unlimited)
+  # valueFiles: list of values files from the chart repository (optional)
   - name: webterm
     description: "Terminal web pour étudiants"
     chart: "github.com/AYDEV-FR/dploy-charts/charts/webterm@main"
     enabled: true
     icon: "terminal"
-    ttl: 86400  # 24 hours in seconds
+    ttl: "86400"  # 24 hours
+    category: "learning,linux"
 
   - name: vscode
     description: "VSCode dans le navigateur"
     chart: "github.com/AYDEV-FR/dploy-charts/charts/vscode@main"
     enabled: true
     icon: "code"
-    ttl: 43200  # 12 hours in seconds
+    ttl: "43200,3600,5"  # 12h, extendable by 1h, max 5 times
+    category: "development,ide"
+    # Example with valueFiles: use custom values files from the chart repo
+    # valueFiles:
+    #   - "values-production.yaml"
+    #   - "values-large.yaml"
     # Example with extraValues and variable replacement
     extraValues: |
       persistence:
@@ -30,11 +39,13 @@ environments:
     chart: "github.com/AYDEV-FR/dploy-charts/charts/jupyter@main"
     enabled: true
     icon: "book"
-    ttl: 86400  # 24 hours in seconds
+    ttl: "300,300,2"  # 5min, extendable by 5min, max 2 times
+    category: "learning,python"
 
   - name: postgres
     description: "PostgreSQL database"
     chart: "github.com/AYDEV-FR/dploy-charts/charts/postgresql@v1.2.3"
     enabled: true
     icon: "database"
-    ttl: 172800  # 48 hours in seconds
+    ttl: "-1"  # Unlimited (never expires)
+    category: "databases"
