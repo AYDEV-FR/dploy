@@ -122,6 +122,151 @@ async function apiCall(endpoint, options = {}) {
     }
 }
 
+// Parse category string into { category, subcategory }
+function parseCategory(categoryStr) {
+    if (!categoryStr) {
+        return { category: 'default', subcategory: null };
+    }
+    const parts = categoryStr.split(',');
+    return {
+        category: parts[0] || 'default',
+        subcategory: parts[1] || null
+    };
+}
+
+// Group environments by category and subcategory
+function groupEnvironments(envs) {
+    const groups = {};
+
+    envs.forEach(env => {
+        const { category, subcategory } = parseCategory(env.category);
+
+        if (!groups[category]) {
+            groups[category] = { direct: [], subcategories: {} };
+        }
+
+        if (subcategory) {
+            if (!groups[category].subcategories[subcategory]) {
+                groups[category].subcategories[subcategory] = [];
+            }
+            groups[category].subcategories[subcategory].push(env);
+        } else {
+            groups[category].direct.push(env);
+        }
+    });
+
+    return groups;
+}
+
+// Render environment card
+function renderEnvCard(env) {
+    // Build TTL display for catalog
+    let ttlBadge = '';
+    if (env.isUnlimited) {
+        ttlBadge = `
+            <span class="catalog-badge catalog-unlimited">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18.178 8c5.096 0 5.096 8 0 8-5.095 0-7.133-8-12.739-8-4.585 0-4.585 8 0 8 5.606 0 7.644-8 12.74-8z"/>
+                </svg>
+                Unlimited
+            </span>
+        `;
+    } else {
+        const duration = formatDuration(env.ttl);
+        ttlBadge = `
+            <span class="catalog-badge catalog-ttl">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                </svg>
+                ${duration}
+            </span>
+        `;
+    }
+
+    // Build extend info badge
+    let extendBadge = '';
+    if (!env.isUnlimited && (env.extendTTL > 0 || env.maxExtends > 0)) {
+        const extendDuration = env.extendTTL > 0 ? formatDuration(env.extendTTL) : '';
+        const maxInfo = env.maxExtends > 0 ? `${env.maxExtends}x` : '';
+        const extendText = extendDuration && maxInfo ? `+${extendDuration} (${maxInfo})` :
+                          extendDuration ? `+${extendDuration}` :
+                          maxInfo ? `Extend: ${maxInfo}` : '';
+        if (extendText) {
+            extendBadge = `
+                <span class="catalog-badge catalog-extend">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                    </svg>
+                    ${extendText}
+                </span>
+            `;
+        }
+    }
+
+    return `
+        <div class="env-card">
+            <div class="env-card-icon">
+                <span class="env-icon">${ICONS[env.icon] || ICONS.default}</span>
+            </div>
+            <div class="env-card-content">
+                <div class="env-name">${env.name}</div>
+                <div class="env-description">${env.description}</div>
+                <div class="env-card-badges">
+                    ${ttlBadge}
+                    ${extendBadge}
+                </div>
+            </div>
+            <div class="env-card-action">
+                <a href="/run/${env.name}" class="btn-launch">
+                    Launch
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M5 12h14M12 5l7 7-7 7"/>
+                    </svg>
+                </a>
+            </div>
+        </div>
+    `;
+}
+
+// Generate slug for anchor IDs
+function slugify(text) {
+    return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
+
+// Render Table of Contents
+function renderTOC(groups, categoryNames) {
+    const tocContainer = document.querySelector('#catalog-toc .toc-list');
+    if (!tocContainer) return;
+
+    let tocHtml = '';
+
+    categoryNames.forEach(categoryName => {
+        const group = groups[categoryName];
+        const displayName = categoryName === 'default' ? 'Other' : categoryName.charAt(0).toUpperCase() + categoryName.slice(1);
+        const categorySlug = slugify(categoryName);
+
+        tocHtml += `<li class="toc-category">`;
+        tocHtml += `<a href="#cat-${categorySlug}" class="toc-category-link">${displayName}</a>`;
+
+        // Add subcategories
+        const subcategoryNames = Object.keys(group.subcategories).sort();
+        if (subcategoryNames.length > 0) {
+            tocHtml += `<ul class="toc-subcategories">`;
+            subcategoryNames.forEach(subcategoryName => {
+                const subDisplayName = subcategoryName.charAt(0).toUpperCase() + subcategoryName.slice(1);
+                const subSlug = slugify(subcategoryName);
+                tocHtml += `<li><a href="#cat-${categorySlug}-${subSlug}" class="toc-subcategory-link">${subDisplayName}</a></li>`;
+            });
+            tocHtml += `</ul>`;
+        }
+
+        tocHtml += `</li>`;
+    });
+
+    tocContainer.innerHTML = tocHtml;
+}
+
 // Load Available Environments (Catalog)
 async function loadAvailableEnvironments() {
     const container = document.getElementById('available-environments');
@@ -137,22 +282,53 @@ async function loadAvailableEnvironments() {
             return;
         }
 
-        container.innerHTML = envs.map(env => `
-            <div class="env-card">
-                <div class="env-card-header">
-                    <div class="env-title">
-                        <span class="env-icon">${ICONS[env.icon] || ICONS.default}</span>
-                        <span class="env-name">${env.name}</span>
-                    </div>
-                </div>
-                <div class="env-description">${env.description}</div>
-                <div class="env-actions">
-                    <a href="/run/${env.name}" class="btn-small btn-primary">
-                        🚀 Launch
-                    </a>
-                </div>
-            </div>
-        `).join('');
+        const groups = groupEnvironments(envs);
+        let html = '';
+
+        // Sort categories: 'default' last, others alphabetically
+        const categoryNames = Object.keys(groups).sort((a, b) => {
+            if (a === 'default') return 1;
+            if (b === 'default') return -1;
+            return a.localeCompare(b);
+        });
+
+        // Render TOC
+        renderTOC(groups, categoryNames);
+
+        categoryNames.forEach(categoryName => {
+            const group = groups[categoryName];
+            const displayName = categoryName === 'default' ? 'Other' : categoryName.charAt(0).toUpperCase() + categoryName.slice(1);
+            const categorySlug = slugify(categoryName);
+
+            html += `<div id="cat-${categorySlug}" class="category-section">`;
+            html += `<h3 class="category-title">${displayName}</h3>`;
+
+            // Render direct items (no subcategory)
+            if (group.direct.length > 0) {
+                html += `<div class="env-grid">`;
+                html += group.direct.map(renderEnvCard).join('');
+                html += `</div>`;
+            }
+
+            // Render subcategories
+            const subcategoryNames = Object.keys(group.subcategories).sort();
+            subcategoryNames.forEach(subcategoryName => {
+                const items = group.subcategories[subcategoryName];
+                const subDisplayName = subcategoryName.charAt(0).toUpperCase() + subcategoryName.slice(1);
+                const subSlug = slugify(subcategoryName);
+
+                html += `<div id="cat-${categorySlug}-${subSlug}" class="subcategory-section">`;
+                html += `<h4 class="subcategory-title">${subDisplayName}</h4>`;
+                html += `<div class="env-grid">`;
+                html += items.map(renderEnvCard).join('');
+                html += `</div>`;
+                html += `</div>`;
+            });
+
+            html += `</div>`;
+        });
+
+        container.innerHTML = html;
     } catch (error) {
         container.innerHTML = '<p class="error-state">Failed to load templates</p>';
     }
@@ -197,10 +373,61 @@ async function loadUserEnvironments() {
         }
 
         container.innerHTML = data.environments.map(env => {
-            // Parse ISO 8601 timestamp
-            const expiresAt = new Date(env.expiresAt);
-            const timeLeft = getTimeLeft(expiresAt);
             const statusClass = env.status.toLowerCase();
+
+            // Build TTL display
+            let ttlDisplay = '';
+            let extendButton = '';
+
+            if (env.isUnlimited) {
+                ttlDisplay = `
+                    <span class="meta-badge meta-unlimited">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <path d="M12 6v6l4 2"/>
+                        </svg>
+                        Unlimited
+                    </span>
+                `;
+            } else {
+                const expiresAt = new Date(env.expiresAt);
+                const timeLeft = getTimeLeft(expiresAt);
+                const isExpiringSoon = (expiresAt - new Date()) < 30 * 60 * 1000; // < 30 min
+
+                ttlDisplay = `
+                    <span class="meta-badge ${isExpiringSoon ? 'meta-warning' : ''}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                        ${timeLeft}
+                    </span>
+                `;
+
+                // Build extend info
+                let extendInfo = '';
+                if (env.maxExtends > 0) {
+                    const remaining = env.maxExtends - env.extendCount;
+                    extendInfo = `(${remaining}/${env.maxExtends} left)`;
+                } else if (env.extendCount > 0) {
+                    extendInfo = `(${env.extendCount}x extended)`;
+                }
+
+                // Check if can extend
+                const canExtend = env.maxExtends <= 0 || env.extendCount < env.maxExtends;
+
+                extendButton = `
+                    <button onclick="extendEnvironment('${env.name}')"
+                            class="btn-icon-action ${!canExtend ? 'btn-disabled' : ''}"
+                            title="Extend ${extendInfo}"
+                            ${!canExtend ? 'disabled' : ''}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                    </button>
+                `;
+            }
 
             return `
                 <div class="env-list-item">
@@ -211,6 +438,7 @@ async function loadUserEnvironments() {
                                 <span class="env-list-name">${env.name}</span>
                                 <span class="env-status status-${statusClass}">${env.status}</span>
                             </div>
+                            <div class="env-list-description">${env.description}</div>
                             <a href="${env.url}" target="_blank" class="env-list-url">${env.url}</a>
                             <div class="env-list-meta">
                                 <span class="meta-badge">
@@ -220,13 +448,7 @@ async function loadUserEnvironments() {
                                     </svg>
                                     ${env.uuid}
                                 </span>
-                                <span class="meta-badge">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <circle cx="12" cy="12" r="10"/>
-                                        <polyline points="12 6 12 12 16 14"/>
-                                    </svg>
-                                    ${timeLeft}
-                                </span>
+                                ${ttlDisplay}
                             </div>
                         </div>
                     </div>
@@ -238,12 +460,7 @@ async function loadUserEnvironments() {
                                 <line x1="10" y1="14" x2="21" y2="3"/>
                             </svg>
                         </button>
-                        <button onclick="extendEnvironment('${env.name}')" class="btn-icon-action" title="Extend">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <circle cx="12" cy="12" r="10"/>
-                                <polyline points="12 6 12 12 16 14"/>
-                            </svg>
-                        </button>
+                        ${extendButton}
                         <button onclick="deleteEnvironment('${env.name}')" class="btn-icon-action btn-danger-icon" title="Delete">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <polyline points="3 6 5 6 21 6"/>
@@ -361,6 +578,24 @@ function getTimeLeft(expiresAt) {
 
     if (hours > 0) {
         return `${hours}h ${minutes}m`;
+    }
+    return `${minutes}m`;
+}
+
+// Format duration from seconds to human readable
+function formatDuration(seconds) {
+    if (seconds < 0) return 'Unlimited';
+    if (seconds === 0) return 'Default';
+
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+
+    if (days > 0) {
+        return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+    }
+    if (hours > 0) {
+        return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
     }
     return `${minutes}m`;
 }

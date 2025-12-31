@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -125,25 +126,55 @@ func (c *Client) GetUserApplication(ctx context.Context, username, envName strin
 
 func (c *Client) CreateApplication(ctx context.Context, username, envName string, env *models.Environment) (*unstructured.Unstructured, error) {
 	shortUUID := generateShortUUID()
-	ttl := c.config.DefaultTTL
-	if env.TTL != nil {
-		ttl = *env.TTL
-	}
 
-	expiresAt := time.Now().Add(time.Duration(ttl) * time.Second)
-	expiresAtISO := expiresAt.UTC().Format(time.RFC3339) // ISO 8601 format
+	// Parse TTL configuration
+	ttlConfig := env.ParseTTL()
+	ttl := c.config.DefaultTTL
+	if ttlConfig != nil {
+		ttl = ttlConfig.TTL
+	}
 
 	appName := fmt.Sprintf("%s-%s-%s", username, envName, shortUUID)
 	namespace := fmt.Sprintf("%s-%s-%s", username, envName, shortUUID)
 	ingressHost := fmt.Sprintf("%s-%s.%s", username, shortUUID, c.config.BaseDomain)
 
-	logger.Debug("Creating ArgoCD application",
-		"appName", appName,
-		"namespace", namespace,
-		"ingressHost", ingressHost,
-		"ttl", ttl,
-		"expiresAt", expiresAtISO,
-	)
+	// Build annotations
+	annotations := map[string]interface{}{
+		"dploy.dev/uuid":          shortUUID,
+		"dploy.dev/extend-count":  "0",
+	}
+
+	// Handle TTL: -1 means unlimited (no expiration)
+	if ttl == -1 {
+		logger.Debug("Creating ArgoCD application with unlimited TTL",
+			"appName", appName,
+			"namespace", namespace,
+			"ingressHost", ingressHost,
+		)
+		// No expires-at annotation for unlimited TTL
+	} else {
+		expiresAt := time.Now().Add(time.Duration(ttl) * time.Second)
+		expiresAtISO := expiresAt.UTC().Format(time.RFC3339)
+		annotations["dploy.dev/expires-at"] = expiresAtISO
+
+		logger.Debug("Creating ArgoCD application",
+			"appName", appName,
+			"namespace", namespace,
+			"ingressHost", ingressHost,
+			"ttl", ttl,
+			"expiresAt", expiresAtISO,
+		)
+	}
+
+	// Store extend configuration if specified
+	if ttlConfig != nil {
+		if ttlConfig.HasExtend {
+			annotations["dploy.dev/extend-ttl"] = fmt.Sprintf("%d", ttlConfig.ExtendTTL)
+		}
+		if ttlConfig.HasMax {
+			annotations["dploy.dev/max-extends"] = fmt.Sprintf("%d", ttlConfig.MaxExtends)
+		}
+	}
 
 	// Build base Helm values
 	helmValues := fmt.Sprintf("username: %s\nuuid: %s\ningressHost: %s", username, shortUUID, ingressHost)
@@ -164,14 +195,27 @@ func (c *Client) CreateApplication(ctx context.Context, username, envName string
 	)
 	logger.Debug("Helm values", "values", helmValues)
 
+	// Build Helm configuration
+	helmConfig := map[string]interface{}{
+		"values": helmValues,
+	}
+
+	// Add valueFiles if specified
+	if len(env.ValueFiles) > 0 {
+		valueFiles := make([]interface{}, len(env.ValueFiles))
+		for i, f := range env.ValueFiles {
+			valueFiles[i] = f
+		}
+		helmConfig["valueFiles"] = valueFiles
+		logger.Debug("Using custom value files", "valueFiles", env.ValueFiles)
+	}
+
 	// Build Git source
 	source := map[string]interface{}{
 		"repoURL":        repoURL,
 		"targetRevision": chartRevision,
 		"path":           chartPath,
-		"helm": map[string]interface{}{
-			"values": helmValues,
-		},
+		"helm":           helmConfig,
 	}
 
 	app := &unstructured.Unstructured{
@@ -188,10 +232,7 @@ func (c *Client) CreateApplication(ctx context.Context, username, envName string
 					"dploy.dev/owner": username,
 					"dploy.dev/env":   envName,
 				},
-				"annotations": map[string]interface{}{
-					"dploy.dev/uuid":       shortUUID,
-					"dploy.dev/expires-at": expiresAtISO,
-				},
+				"annotations": annotations,
 			},
 			"spec": map[string]interface{}{
 				"project": c.config.ArgoCDProject,
@@ -231,24 +272,54 @@ func (c *Client) ExtendApplication(ctx context.Context, appName string) (time.Ti
 	annotations := app.GetAnnotations()
 	currentExpires := annotations["dploy.dev/expires-at"]
 
-	var expiresTime time.Time
-	if currentExpires != "" {
-		// Parse ISO 8601 timestamp
-		parsedTime, parseErr := time.Parse(time.RFC3339, currentExpires)
-		if parseErr == nil {
-			expiresTime = parsedTime
-		} else {
-			expiresTime = time.Now()
+	// Check if this is an unlimited TTL environment
+	if currentExpires == "" {
+		return time.Time{}, fmt.Errorf("environment has unlimited TTL, no extension needed")
+	}
+
+	// Check max extends limit
+	extendCountStr := annotations["dploy.dev/extend-count"]
+	extendCount := 0
+	if extendCountStr != "" {
+		if count, err := strconv.Atoi(extendCountStr); err == nil {
+			extendCount = count
 		}
+	}
+
+	maxExtendsStr := annotations["dploy.dev/max-extends"]
+	if maxExtendsStr != "" {
+		if maxExtends, err := strconv.Atoi(maxExtendsStr); err == nil && maxExtends >= 0 {
+			if extendCount >= maxExtends {
+				return time.Time{}, fmt.Errorf("maximum extensions (%d) reached", maxExtends)
+			}
+		}
+	}
+
+	// Determine extend TTL (use per-environment value if set, otherwise use default)
+	extendTTL := c.config.ExtendTTL
+	extendTTLStr := annotations["dploy.dev/extend-ttl"]
+	if extendTTLStr != "" {
+		if customExtendTTL, err := strconv.Atoi(extendTTLStr); err == nil {
+			extendTTL = customExtendTTL
+		}
+	}
+
+	// Parse current expiration time
+	var expiresTime time.Time
+	parsedTime, parseErr := time.Parse(time.RFC3339, currentExpires)
+	if parseErr == nil {
+		expiresTime = parsedTime
 	} else {
 		expiresTime = time.Now()
 	}
 
-	newExpires := expiresTime.Add(time.Duration(c.config.ExtendTTL) * time.Second)
-	newExpiresISO := newExpires.UTC().Format(time.RFC3339) // ISO 8601 format
+	// Calculate new expiration
+	newExpires := expiresTime.Add(time.Duration(extendTTL) * time.Second)
+	newExpiresISO := newExpires.UTC().Format(time.RFC3339)
 
-	// Update expires-at annotation
+	// Update annotations
 	annotations["dploy.dev/expires-at"] = newExpiresISO
+	annotations["dploy.dev/extend-count"] = fmt.Sprintf("%d", extendCount+1)
 	app.SetAnnotations(annotations)
 
 	_, err = c.dynamic.Resource(applicationGVR).Namespace(c.config.ArgoCDNamespace).Update(ctx, app, metav1.UpdateOptions{})

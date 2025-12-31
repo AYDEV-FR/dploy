@@ -62,14 +62,16 @@
         <main id="main-content" style="display: none;">
             <!-- Available Templates Section -->
             <section class="section">
-                <div class="section-header">
-                    <div class="section-title">
-                        <h2>Available Templates</h2>
-                        <p class="section-description">Select a template to launch a new environment</p>
+                <div class="catalog-layout">
+                    <!-- Table of Contents -->
+                    <nav id="catalog-toc" class="catalog-toc">
+                        <div class="toc-title">Categories</div>
+                        <ul class="toc-list"></ul>
+                    </nav>
+                    <!-- Environments Grid -->
+                    <div id="available-environments" class="catalog-container">
+                        <p class="loading">Loading...</p>
                     </div>
-                </div>
-                <div id="available-environments" class="env-grid">
-                    <p class="loading">Loading...</p>
                 </div>
             </section>
         </main>
