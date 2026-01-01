@@ -1,4 +1,4 @@
-.PHONY: help build test docker-build docker-load logs port-forward clean
+.PHONY: help build build-go test docker-build docker-load logs port-forward clean frontend-install frontend-build frontend-dev
 
 # Detect container runtime
 CONTAINER_RUNTIME := $(shell command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && echo docker || echo podman)
@@ -6,8 +6,21 @@ CONTAINER_RUNTIME := $(shell command -v docker >/dev/null 2>&1 && docker info >/
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
+# Frontend
+frontend-install: ## Install frontend dependencies
+	cd web && npm ci
+
+frontend-build: ## Build frontend
+	cd web && npm run build
+
+frontend-dev: ## Run frontend dev server
+	cd web && npm run dev
+
 # Development
-build: ## Build the Go binary
+build: frontend-build ## Build the Go binary (with frontend)
+	go build -o dploy-api ./cmd/api
+
+build-go: ## Build only the Go binary (skip frontend)
 	go build -o dploy-api ./cmd/api
 
 run: ## Run locally (requires env vars)

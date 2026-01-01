@@ -94,14 +94,8 @@ func main() {
 		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
 	}))
 
-	// Static files (web UI)
-	app.Static("/static", "./web")
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.SendFile("./web/index.html")
-	})
-	app.Get("/catalog", func(c *fiber.Ctx) error {
-		return c.SendFile("./web/catalog.html")
-	})
+	// Static files (React app)
+	app.Static("/static", "./web/dist/static")
 
 	// Health endpoints (no auth)
 	app.Get("/health", healthHandler.Health)
@@ -117,9 +111,9 @@ func main() {
 	// Public API endpoints
 	app.Get("/api/environments/available", envHandler.ListAvailable)
 
-	// Public route - /run/{env} serves HTML page (handles auth in browser)
+	// Public route - /run/{env} serves React SPA (handles auth in browser)
 	app.Get("/run/:env", func(c *fiber.Ctx) error {
-		return c.SendFile("./web/run.html")
+		return c.SendFile("./web/dist/index.html")
 	})
 
 	// Protected API endpoints
@@ -129,6 +123,11 @@ func main() {
 	api.Get("/run/:env/status", runHandler.GetStatus)
 	api.Post("/run/:env/extend", runHandler.ExtendTTL)
 	api.Delete("/run/:env", runHandler.DeleteEnvironment)
+
+	// SPA fallback - serve React app for all unmatched routes
+	app.Get("/*", func(c *fiber.Ctx) error {
+		return c.SendFile("./web/dist/index.html")
+	})
 
 	// Start server
 	addr := cfg.ServerHost + ":" + cfg.ServerPort

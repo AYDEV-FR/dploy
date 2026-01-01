@@ -29,3 +29,10 @@ Thumbs.db
 
 # Vendor
 /vendor/
+
+# Frontend
+web/node_modules/
+web/dist/
+
+# Backup
+web-backup/
