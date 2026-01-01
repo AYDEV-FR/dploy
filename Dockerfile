@@ -1,4 +1,21 @@
-# Build stage
+# Frontend build stage
+FROM node:20-alpine AS frontend
+
+WORKDIR /app/web
+
+# Copy package files
+COPY web/package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY web/ ./
+
+# Build React app
+RUN npm run build
+
+# Go build stage
 FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
@@ -29,8 +46,8 @@ COPY --from=builder /app/dploy-api .
 # Copy config directory
 COPY --from=builder /app/config ./config
 
-# Copy web files (frontend)
-COPY --from=builder /app/web ./web
+# Copy built frontend from frontend stage
+COPY --from=frontend /app/web/dist ./web/dist
 
 # Create non-root user
 RUN adduser -D -u 1000 dploy && \
