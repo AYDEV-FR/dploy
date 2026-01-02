@@ -34,11 +34,12 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o dploy-api ./cmd/api
 
 # Runtime stage
-FROM alpine:latest
-
-RUN apk --no-cache add ca-certificates
+FROM scratch
 
 WORKDIR /app
+
+# Copy CA certificates for HTTPS
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Copy binary from builder
 COPY --from=builder /app/dploy-api .
@@ -49,12 +50,9 @@ COPY --from=builder /app/config ./config
 # Copy built frontend from frontend stage
 COPY --from=frontend /app/web/dist ./web/dist
 
-# Create non-root user
-RUN adduser -D -u 1000 dploy && \
-    chown -R dploy:dploy /app
-
-USER dploy
+# Run as non-root user (numeric UID since no passwd file in scratch)
+USER 1000:1000
 
 EXPOSE 8080
 
-CMD ["./dploy-api"]
+ENTRYPOINT ["/app/dploy-api"]
