@@ -42,7 +42,8 @@ environments:
     chart: "github.com/AYDEV-FR/dploy-charts/webshell@main"
     enabled: true
     icon: "terminal"
-    ttl: 300
+    ttl: 1200
+    category: "linux"
     extraValues: |
       container:
         image:
@@ -52,20 +53,19 @@ environments:
         enabled: false
       ingress:
         enabled: true
-        className: "nginx"
         hosts:
           - host: ${ingressHost}
             paths:
               - path: /
                 pathType: ImplementationSpecific
-        tls: []
 
   - name: ubuntu-terminal
     description: "Terminal web pour étudiants"
     chart: "github.com/AYDEV-FR/dploy-charts/webshell@main"
     enabled: true
     icon: "terminal"
-    ttl: 300
+    ttl: 1200
+    category: "linux"
     extraValues: |
       container:
         image:
@@ -75,20 +75,19 @@ environments:
         enabled: false
       ingress:
         enabled: true
-        className: "nginx"
         hosts:
           - host: ${ingressHost}
             paths:
               - path: /
                 pathType: ImplementationSpecific
-        tls: []
 
   - name: webterm-toolbox
     description: "Terminal web pour étudiants"
     chart: "github.com/AYDEV-FR/dploy-charts/webshell@main"
     enabled: true
     icon: "terminal"
-    ttl: 300
+    ttl: 1200
+    category: "linux"
     extraValues: |
       container:
         image:
@@ -98,20 +97,69 @@ environments:
         enabled: false
       ingress:
         enabled: true
-        className: "nginx"
         hosts:
           - host: ${ingressHost}
             paths:
               - path: /
                 pathType: ImplementationSpecific
-        tls: []
+
+  - name: learning-linux
+    description: "Test learning learning"
+    chart: "github.com/AYDEV-FR/learning-ui/chart@main"
+    enabled: true
+    icon: "terminal"
+    ttl: 1200
+    category: "linux,beginner"
+    extraValues: |
+      editor:
+        enabled: true
+
+  - name: learning-git
+    description: "Test learning learning"
+    chart: "github.com/AYDEV-FR/learning-ui/chart@main"
+    enabled: true
+    icon: "terminal"
+    ttl: 1200
+    category: "linux,git"
+    valueFiles:
+      - "git.values.yaml"
+    extraValues: |
+      editor:
+        enabled: true
+
+  - name: learning-openssl
+    description: "Test learning learning"
+    chart: "github.com/AYDEV-FR/learning-ui/chart@main"
+    enabled: true
+    icon: "terminal"
+    ttl: 1200
+    category: "linux,crypto"
+    valueFiles:
+      - "openssl.values.yaml"
+    extraValues: |
+      editor:
+        enabled: true
+
+  - name: learning-kubernetes
+    description: "Test learning learning"
+    chart: "github.com/AYDEV-FR/learning-ui/chart@main"
+    enabled: true
+    icon: "terminal"
+    ttl: 1200
+    category: "linux,kubernetes"
+    valueFiles:
+      - "kubernetes01.values.yaml"
+    extraValues: |
+      editor:
+        enabled: true
 
   - name: kali-desktop
     description: "Kali Desktop"
     chart: "github.com/AYDEV-FR/dploy-charts/kasm@main"
     enabled: true
+    visible: false
     icon: "box"
-    ttl: 300
+    ttl: 1200
     extraValues: |
       image:
         repository: kasmweb/core-kali-rolling
@@ -120,20 +168,19 @@ environments:
         enabled: false
       ingress:
         enabled: true
-        className: "nginx"
         hosts:
           - host: ${ingressHost}
             paths:
               - path: /
                 pathType: ImplementationSpecific
-        tls: []
 
   - name: ubuntu-desktop
     description: "Ubuntu Desktop"
     chart: "github.com/AYDEV-FR/dploy-charts/kasm@main"
     enabled: true
     icon: "box"
-    ttl: 300
+    ttl: 1200
+    category: "desktop"
     extraValues: |
       image:
         repository: kasmweb/ubuntu-noble-desktop
@@ -142,20 +189,18 @@ environments:
         enabled: false
       ingress:
         enabled: true
-        className: "nginx"
         hosts:
           - host: ${ingressHost}
             paths:
               - path: /
                 pathType: ImplementationSpecific
-        tls: []
 
   - name: chromium
     description: "Remote Virtual Browser"
     chart: "github.com/AYDEV-FR/dploy-charts/kasm@main"
     enabled: true
     icon: "web"
-    ttl: 300
+    ttl: 1200
     extraValues: |
       image:
         repository: kasmweb/chromium
@@ -164,13 +209,28 @@ environments:
         enabled: false
       ingress:
         enabled: true
-        className: "nginx"
         hosts:
           - host: ${ingressHost}
             paths:
               - path: /
                 pathType: ImplementationSpecific
-        tls: []
+
+  - name: vscode
+    description: "VSCode"
+    chart: "github.com/AYDEV-FR/dploy-charts/vscode@main"
+    enabled: true
+    icon: "book"
+    ttl: 1200
+    extraValues: |
+      networkPolicy:
+        enabled: false
+      ingress:
+        enabled: true
+        hosts:
+          - host: ${ingressHost}
+            paths:
+              - path: /
+                pathType: ImplementationSpecific
 
 ingress:
   enabled: true

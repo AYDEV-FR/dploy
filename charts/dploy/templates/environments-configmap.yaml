@@ -20,6 +20,15 @@ data:
         {{- if hasKey . "visible" }}
         visible: {{ .visible }}
         {{- end }}
+        {{- if .category }}
+        category: {{ .category | quote }}
+        {{- end }}
+        {{- if .valueFiles }}
+        valueFiles:
+        {{- range .valueFiles }}
+          - {{ . | quote }}
+        {{- end }}
+        {{- end }}
         {{- if .extraValues }}
         extraValues: |
 {{ .extraValues | indent 10 }}
