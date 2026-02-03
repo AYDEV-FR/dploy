@@ -3,7 +3,7 @@ module github.com/AYDEV-FR/dploy
 go 1.25.5
 
 require (
-	github.com/gofiber/fiber/v2 v2.52.10
+	github.com/gofiber/fiber/v2 v2.52.11
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	go.uber.org/zap v1.27.1
