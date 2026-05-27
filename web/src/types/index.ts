@@ -22,6 +22,8 @@ export interface Environment {
   isUnlimited: boolean
   extendCount: number
   maxExtends: number
+  owner?: string // resolved owner key (username, group, …)
+  shared?: boolean // true when owned by someone other than you (team-shared)
 }
 
 export type EnvironmentStatus =
@@ -48,6 +50,8 @@ export interface RunEnvironmentResponse {
   url: string
   status: string
   expiresAt: string
+  owner?: string
+  shared?: boolean
 }
 
 // API response for environment status

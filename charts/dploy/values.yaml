@@ -1,5 +1,13 @@
 # Dploy Helm Chart Values
+#
+# The chart deploys two components:
+#   * the API server (GoFiber + OIDC) — reads the catalog and creates instances
+#   * the operator — reconciles DployInstance/DployTemplate into Flux resources
+# CRDs are installed from the chart's crds/ directory.
 
+# ---------------------------------------------------------------------------
+# API server
+# ---------------------------------------------------------------------------
 replicaCount: 1
 
 image:
@@ -16,18 +24,14 @@ serviceAccount:
   annotations: {}
   name: ""
 
-# ArgoCD configuration
-argocd:
-  namespace: argocd
-  # Name of the ArgoCD AppProject to use (must exist)
-  project: dploy
-
 # Dploy API configuration
 config:
+  # Namespace where DployTemplate/DployInstance CRs live.
+  # Empty string defaults to the release namespace.
+  namespace: ""
   maxEnvironmentsPerUser: 5
-  defaultTTL: 86400      # 24 hours in seconds
-  extendTTL: 7200        # 2 hours in seconds
-  baseDomain: env.dploy.dev
+  defaultTTL: 86400 # 24h, fallback when a template omits TTL
+  extendTTL: 7200   # 2h, fallback extension granted per /extend
   serverHost: "0.0.0.0"
   serverPort: 8080
 
@@ -42,20 +46,6 @@ auth:
   oidcIssuer: ""
   oidcPublicIssuer: ""
   oidcRedirectURL: ""
-
-# Environments configuration
-# Define available environments that users can deploy
-environments: []
-  # - name: webterm
-  #   description: "Web terminal"
-  #   chart: "github.com/AYDEV-FR/dploy-charts/webshell@main"
-  #   enabled: true
-  #   visible: true    # Set to false to hide from listings (still accessible via /run/{name})
-  #   icon: "terminal"
-  #   ttl: 3600
-  #   extraValues: |
-  #     ingress:
-  #       enabled: true
 
 service:
   type: ClusterIP
@@ -80,11 +70,8 @@ resources:
     memory: 512Mi
 
 nodeSelector: {}
-
 tolerations: []
-
 affinity: {}
-
 podAnnotations: {}
 
 podSecurityContext:
@@ -97,3 +84,50 @@ securityContext:
   capabilities:
     drop:
       - ALL
+
+# ---------------------------------------------------------------------------
+# Operator
+# ---------------------------------------------------------------------------
+operator:
+  enabled: true
+  replicaCount: 1
+  # Enable leader election to run more than one replica safely.
+  leaderElection: false
+
+  image:
+    repository: ghcr.io/aydev-fr/dploy-operator
+    pullPolicy: IfNotPresent
+    tag: "main"
+
+  serviceAccount:
+    create: true
+    annotations: {}
+    name: ""
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+  podSecurityContext:
+    runAsNonRoot: true
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    runAsNonRoot: true
+    runAsUser: 65532
+    capabilities:
+      drop:
+        - ALL
+
+# CRDs are installed from the chart's crds/ directory on `helm install`.
+# Helm does not upgrade CRDs automatically — run `make install`
+# (kubectl apply -f config/crd/bases) to update them on chart upgrades.

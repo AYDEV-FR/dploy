@@ -1,0 +1,384 @@
+---
+title: TLS Certificates
+description: Wildcard-certificate strategies for per-environment HTTPS, with Ingress or Gateway API.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+This guide covers TLS for Dploy environments, the security trade-offs, and two recommended
+approaches: **Ingress with a wildcard certificate** and **Gateway API**.
+
+## Security considerations
+
+### Individual certificates per environment
+
+Issuing a certificate per environment hostname (e.g. `john-abc12345.env.dploy.dev`) is
+problematic:
+
+- **Let's Encrypt rate limits** — 50 certs/registered-domain/week, 5 duplicates/week,
+  300 orders/account/3h. Dynamic environments hit these quickly.
+- **Certificate Transparency logs** — every issued hostname is public (e.g. via
+  [crt.sh](https://crt.sh)), leaking subdomains and user activity.
+
+### Wildcard certificates
+
+A wildcard (`*.env.dploy.dev`) solves both:
+
+- **One certificate** covers every environment; no rate-limit pressure.
+- **Privacy** — individual hostnames never appear in CT logs.
+
+Trade-offs to manage:
+
+- Broader blast radius if the private key is compromised.
+- Requires a **DNS-01** challenge (HTTP-01 can't issue wildcards), so cert-manager needs DNS API
+  credentials.
+
+Mitigations: scope the wildcard to a dedicated subdomain, keep validity short, store the key in a
+restricted namespace, and monitor issuance.
+
+## Prerequisites
+
+- **cert-manager** installed
+- **DNS provider API credentials** for the DNS-01 challenge
+- An **Ingress** or **Gateway API** controller
+
+### Install cert-manager
+
+```bash
+helm repo add jetstack https://charts.jetstack.io
+helm repo update
+
+helm install cert-manager jetstack/cert-manager \
+  --namespace cert-manager --create-namespace \
+  --set crds.enabled=true
+```
+
+### ClusterIssuer (DNS-01)
+
+<Tabs>
+<TabItem label="Cloudflare">
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudflare-api-token
+  namespace: cert-manager
+type: Opaque
+stringData:
+  api-token: "your-cloudflare-api-token"
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@dploy.dev
+    privateKeySecretRef:
+      name: letsencrypt-prod-account
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token
+              key: api-token
+        selector:
+          dnsZones:
+            - "dploy.dev"
+```
+
+</TabItem>
+<TabItem label="Route53 (AWS)">
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@dploy.dev
+    privateKeySecretRef:
+      name: letsencrypt-prod-account
+    solvers:
+      - dns01:
+          route53:
+            region: eu-west-1
+            # Use IRSA (recommended) or accessKeyIDSecretRef/secretAccessKeySecretRef
+```
+
+</TabItem>
+<TabItem label="OVH">
+
+```yaml
+# Requires the OVH webhook: https://github.com/baarde/cert-manager-webhook-ovh
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@dploy.dev
+    privateKeySecretRef:
+      name: letsencrypt-prod-account
+    solvers:
+      - dns01:
+          webhook:
+            groupName: acme.dploy.dev
+            solverName: ovh
+            config:
+              endpoint: ovh-eu
+              applicationSecretRef:
+                name: ovh-credentials
+                key: application-secret
+              consumerKeySecretRef:
+                name: ovh-credentials
+                key: consumer-key
+```
+
+</TabItem>
+</Tabs>
+
+## Option 1 — Ingress with a wildcard certificate
+
+Uses traditional Ingress resources with the wildcard secret replicated into each environment
+namespace.
+
+![Ingress with a wildcard certificate: the cert-manager namespace holds the wildcard Certificate and Secret; a replicator copies the secret into each environment namespace, where each environment has its own Ingress referencing the copied secret.](/diagrams/tls-ingress-replicator.svg)
+
+### 1. Install kubernetes-replicator
+
+[kubernetes-replicator](https://github.com/mittwald/kubernetes-replicator) copies secrets across
+namespaces by annotation.
+
+```bash
+helm repo add mittwald https://helm.mittwald.de
+helm repo update
+helm install kubernetes-replicator mittwald/kubernetes-replicator --namespace kube-system
+```
+
+### 2. Wildcard certificate
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: wildcard-env-dploy-dev
+  namespace: cert-manager
+spec:
+  secretName: wildcard-env-dploy-dev-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - "*.env.dploy.dev"
+  secretTemplate:
+    annotations:
+      replicator.v1.mittwald.de/replicate-to-matching: >
+        dploy.dev/managed=true
+```
+
+:::note
+Dploy labels every environment namespace with `dploy.dev/managed=true`, so the replicator copies
+the secret only into managed namespaces.
+:::
+
+### 3. Environment chart Ingress
+
+Reference the replicated secret from your chart's Ingress (set `ingress.host` from your
+`valuesTemplate`):
+
+```yaml
+# templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: wildcard-env-dploy-dev-tls
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}
+                port: { number: 80 }
+```
+
+## Option 2 — Gateway API (recommended)
+
+TLS terminates centrally at a Gateway, so the certificate lives in **one** namespace and
+environments only need an `HTTPRoute` (no per-namespace secret copies).
+
+![Gateway API: a single Gateway in the gateway namespace terminates TLS with one wildcard certificate and allows routes from namespaces labelled dploy.dev/managed=true; each environment namespace has an HTTPRoute with no TLS config that attaches to the Gateway.](/diagrams/tls-gateway.svg)
+
+| Aspect | Ingress + Replicator | Gateway API |
+|--------|----------------------|-------------|
+| Certificate location | Replicated to N namespaces | Single namespace |
+| Secret exposure | Every environment namespace | Isolated in gateway namespace |
+| Dependency | kubernetes-replicator | Native Kubernetes |
+| Access control | RBAC on secrets | `allowedRoutes` selector |
+
+### 1. Install the Gateway API CRDs
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
+```
+
+### 2. Install a Gateway controller
+
+<Tabs>
+<TabItem label="Traefik">
+
+```bash
+helm repo add traefik https://traefik.github.io/charts
+helm repo update
+helm install traefik traefik/traefik \
+  --namespace traefik-system --create-namespace \
+  --set "providers.kubernetesGateway.enabled=true" \
+  --set "gateway.enabled=false"
+```
+
+Traefik creates a `traefik` GatewayClass — verify with `kubectl get gatewayclass traefik`.
+
+</TabItem>
+<TabItem label="Cilium">
+
+```bash
+helm repo add cilium https://helm.cilium.io
+helm repo update
+helm upgrade cilium cilium/cilium --namespace kube-system \
+  --reuse-values --set gatewayAPI.enabled=true
+```
+
+Cilium creates a `cilium` GatewayClass. Cilium Gateway API needs `kubeProxyReplacement=true`.
+
+</TabItem>
+</Tabs>
+
+### 3. Certificate (same namespace as the Gateway)
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: wildcard-env-dploy-dev
+  namespace: traefik-system   # or your gateway namespace
+spec:
+  secretName: wildcard-env-dploy-dev-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - "*.env.dploy.dev"
+```
+
+### 4. Gateway
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: dploy-gateway
+  namespace: traefik-system
+spec:
+  gatewayClassName: traefik   # or cilium
+  listeners:
+    - name: https-envs
+      hostname: "*.env.dploy.dev"
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: wildcard-env-dploy-dev-tls
+            kind: Secret
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              dploy.dev/managed: "true"
+```
+
+### 5. Environment chart HTTPRoute
+
+The `HTTPRoute` needs no TLS config — the Gateway terminates TLS:
+
+```yaml
+# templates/httproute.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  parentRefs:
+    - name: dploy-gateway
+      namespace: traefik-system
+  hostnames:
+    - {{ .Values.ingress.host | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ .Release.Name }}
+          port: 80
+```
+
+### 6. ReferenceGrant (if required)
+
+Some implementations need explicit cross-namespace permission:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-dploy-routes
+  namespace: traefik-system
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: "*"
+  to:
+    - group: ""
+      kind: Service
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+```
+
+:::tip
+For new deployments, prefer Gateway API: the certificate stays in one place and access is
+controlled with an `allowedRoutes` selector instead of replicating secrets everywhere.
+:::
+
+## Troubleshooting
+
+```bash
+# Certificate not issued
+kubectl describe certificate wildcard-env-dploy-dev -n cert-manager
+kubectl get challenges,orders -A
+kubectl logs -n cert-manager -l app=cert-manager
+
+# Secret not replicated (Ingress approach)
+kubectl logs -n kube-system -l app.kubernetes.io/name=kubernetes-replicator
+kubectl get ns -l dploy.dev/managed=true
+
+# Gateway / HTTPRoute
+kubectl describe gateway dploy-gateway -n traefik-system
+kubectl describe httproute <name> -n <namespace>
+```

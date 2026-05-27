@@ -1,0 +1,34 @@
+{{/*
+The API server only ever reads the catalog and writes DployInstance CRs. It has
+no access to Flux, namespaces or workloads — that boundary is the whole point of
+the operator/API split. A namespaced Role is sufficient since the API operates in
+a single namespace.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "dploy.fullname" . }}
+  namespace: {{ include "dploy.namespace" . }}
+  labels:
+    {{- include "dploy.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - dploy.dev
+    resources:
+      - dploytemplates
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - dploy.dev
+    resources:
+      - dployinstances
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
