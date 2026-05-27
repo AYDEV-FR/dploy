@@ -1,65 +1,24 @@
+// Copyright the Dploy authors.
+// SPDX-License-Identifier: MIT
+
 package handlers
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"time"
 
+	"github.com/gofiber/fiber/v2"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
+	dployv1alpha1 "github.com/AYDEV-FR/dploy/api/v1alpha1"
 	"github.com/AYDEV-FR/dploy/internal/auth"
 	"github.com/AYDEV-FR/dploy/internal/config"
 	"github.com/AYDEV-FR/dploy/internal/kube"
 	"github.com/AYDEV-FR/dploy/internal/logger"
 	"github.com/AYDEV-FR/dploy/internal/models"
-	"github.com/gofiber/fiber/v2"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
-
-const (
-	statusPending  = "pending"
-	statusUnknown  = "Unknown"
-	statusSyncing  = "Syncing"
-	statusDeleting = "Deleting"
-	statusSynced   = "Synced"
-)
-
-// GetAppStatus returns the combined status of an ArgoCD application.
-// It checks sync status before returning health status:
-// - "Deleting" if the app has a deletion timestamp
-// - "Unknown" if sync status is Unknown or missing
-// - "Syncing" if sync status is OutOfSync
-// - Health status (Healthy, Progressing, Degraded, etc.) if synced
-func GetAppStatus(app *unstructured.Unstructured) string {
-	// Check if app is being deleted
-	if app.GetDeletionTimestamp() != nil {
-		return statusDeleting
-	}
-
-	// Get sync status
-	syncStatus := statusUnknown
-	if syncObj, found, err := unstructured.NestedMap(app.Object, "status", "sync"); err == nil && found {
-		if status, ok := syncObj["status"].(string); ok {
-			syncStatus = status
-		}
-	}
-
-	// If sync status is Unknown, return Unknown
-	if syncStatus == statusUnknown {
-		return statusUnknown
-	}
-
-	// If sync status is OutOfSync, return Syncing
-	if syncStatus != statusSynced {
-		return statusSyncing
-	}
-
-	// Sync is complete, return health status
-	healthStatus := statusPending
-	if healthObj, found, err := unstructured.NestedMap(app.Object, "status", "health"); err == nil && found {
-		if status, ok := healthObj["status"].(string); ok {
-			healthStatus = status
-		}
-	}
-
-	return healthStatus
-}
 
 type RunHandler struct {
 	kubeClient *kube.Client
@@ -67,271 +26,336 @@ type RunHandler struct {
 }
 
 func NewRunHandler(kubeClient *kube.Client, cfg *config.Config) *RunHandler {
-	return &RunHandler{
-		kubeClient: kubeClient,
-		config:     cfg,
-	}
+	return &RunHandler{kubeClient: kubeClient, config: cfg}
 }
 
-// CreateEnvironment creates a new environment or returns an existing one.
+// CreateEnvironment provisions an environment from a template, or returns the
+// user's existing one. Pool templates claim a warm instance; others create one.
 //
 //	@Summary		Create or get environment
-//	@Description	GET request that creates a new environment if it doesn't exist, or returns existing one
 //	@Tags			run
 //	@Security		BearerAuth
-//	@Param			env	path	string	true	"Environment name"
+//	@Param			env	path	string	true	"Template name"
 //	@Produce		json
 //	@Success		200	{object}	models.RunEnvironmentResponse
-//	@Failure		401	{object}	models.ErrorResponse
-//	@Failure		403	{object}	models.ErrorResponse
-//	@Failure		404	{object}	models.ErrorResponse
 //	@Router			/run/{env} [get]
 func (h *RunHandler) CreateEnvironment(c *fiber.Ctx) error {
 	username, ok := c.Locals(auth.UserContextKey).(string)
 	if !ok {
-		logger.Debug("Missing user context")
-		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
-			Error: "unauthorized: missing user context",
-		})
+		return unauthorized(c)
 	}
 	envName := c.Params("env")
 	logger.Debug("CreateEnvironment request", "user", username, "env", envName)
 
-	env, err := h.kubeClient.GetEnvironment(envName)
+	tmpl, err := h.kubeClient.GetTemplate(c.Context(), envName)
 	if err != nil {
-		logger.Debug("Environment not found", "env", envName, "error", err)
-		return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{
-			Error: err.Error(),
-		})
+		if apierrors.IsNotFound(err) {
+			return notFound(c, fmt.Sprintf("environment %q not found", envName))
+		}
+		return internalError(c, err)
+	}
+	if !tmpl.Spec.Enabled {
+		return notFound(c, fmt.Sprintf("environment %q is disabled", envName))
 	}
 
-	// Check if already exists
-	existing, err := h.kubeClient.GetUserApplication(c.Context(), username, envName)
-	if err != nil {
-		logger.Error("Failed to get user application", "user", username, "env", envName, "error", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
-			Error: err.Error(),
-		})
-	}
-
-	if existing != nil {
-		logger.Debug("Returning existing application", "user", username, "env", envName)
-		return h.buildResponseFromApp(c, existing, username)
-	}
-
-	// Check global quota
-	apps, err := h.kubeClient.ListUserApplications(c.Context(), username)
-	if err != nil {
-		logger.Error("Failed to list user applications", "user", username, "error", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
-			Error: err.Error(),
-		})
-	}
-
-	logger.Debug("User environment count",
-		"user", username,
-		"current", len(apps.Items),
-		"max", h.config.MaxEnvironmentsPerUser,
-	)
-	if len(apps.Items) >= h.config.MaxEnvironmentsPerUser {
-		logger.Debug("Quota exceeded", "user", username)
+	// Resolve the owner ("primary key") from the requester's claims, per the
+	// template's ownerClaim (username, a group, …).
+	owner, ok := kube.ResolveOwner(claimsMap(c), tmpl.Spec.OwnerClaim, username)
+	if !ok {
+		claimName := tmpl.Spec.OwnerClaim
+		if claimName == "" {
+			claimName = "username"
+		}
 		return c.Status(fiber.StatusForbidden).JSON(models.ErrorResponse{
-			Error: fmt.Sprintf("Maximum %d environments allowed", h.config.MaxEnvironmentsPerUser),
+			Error: fmt.Sprintf("your token has no usable %q claim required to own this environment", claimName),
 		})
 	}
 
-	// Create new application
-	logger.Debug("Creating new application", "user", username, "env", envName)
-	app, err := h.kubeClient.CreateApplication(c.Context(), username, envName, env)
+	// Return the existing instance if this owner already runs this template.
+	existing, err := h.kubeClient.GetUserInstance(c.Context(), owner, envName)
 	if err != nil {
-		logger.Error("Failed to create application", "user", username, "env", envName, "error", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
-			Error: err.Error(),
+		return internalError(c, err)
+	}
+	if existing != nil {
+		return respondInstance(c, existing)
+	}
+
+	// Enforce the per-owner quota.
+	insts, err := h.kubeClient.ListUserInstances(c.Context(), owner)
+	if err != nil {
+		return internalError(c, err)
+	}
+	limit := h.userLimit(tmpl)
+	if len(insts) >= limit {
+		return c.Status(fiber.StatusForbidden).JSON(models.ErrorResponse{
+			Error: fmt.Sprintf("Maximum %d environments allowed", limit),
 		})
 	}
 
-	logger.Info("Created application", "user", username, "env", envName)
-	return h.buildResponseFromApp(c, app, username)
+	params, err := buildParams(c, tmpl)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Error: err.Error()})
+	}
+
+	inst, err := h.kubeClient.CreateOrClaim(c.Context(), owner, claimsJSON(c), params, tmpl)
+	if err != nil {
+		if errors.Is(err, kube.ErrPoolExhausted) {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(models.ErrorResponse{Error: err.Error()})
+		}
+		return internalError(c, err)
+	}
+
+	logger.Info("Provisioned environment", "user", username, "env", envName, "method", tmpl.Spec.Method)
+	return respondInstance(c, inst)
 }
 
 // GetStatus returns the status of a user's environment.
 //
 //	@Summary		Get environment status
-//	@Description	Get status of a user's environment
 //	@Tags			run
 //	@Security		BearerAuth
-//	@Param			env	path	string	true	"Environment name"
+//	@Param			env	path	string	true	"Template name"
 //	@Produce		json
 //	@Success		200	{object}	models.StatusResponse
-//	@Failure		401	{object}	models.ErrorResponse
-//	@Failure		404	{object}	models.ErrorResponse
 //	@Router			/api/run/{env}/status [get]
 func (h *RunHandler) GetStatus(c *fiber.Ctx) error {
 	username, ok := c.Locals(auth.UserContextKey).(string)
 	if !ok {
-		logger.Debug("Missing user context")
-		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
-			Error: "unauthorized: missing user context",
-		})
+		return unauthorized(c)
 	}
 	envName := c.Params("env")
-	logger.Debug("GetStatus request", "user", username, "env", envName)
 
-	app, err := h.kubeClient.GetUserApplication(c.Context(), username, envName)
+	owner, ok := h.resolveOwner(c, envName, username)
+	if !ok {
+		return notFound(c, fmt.Sprintf("environment %q not found", envName))
+	}
+	inst, err := h.kubeClient.GetUserInstance(c.Context(), owner, envName)
 	if err != nil {
-		logger.Error("Failed to get user application", "user", username, "env", envName, "error", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
-			Error: err.Error(),
-		})
+		return internalError(c, err)
 	}
-
-	if app == nil {
-		logger.Debug("Environment not found", "user", username, "env", envName)
-		return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{
-			Error: fmt.Sprintf("Environment %s not found", envName),
-		})
+	if inst == nil {
+		return notFound(c, fmt.Sprintf("environment %q not found", envName))
 	}
-
-	annotations := app.GetAnnotations()
-	uuid := annotations["dploy.dev/uuid"]
-	expiresAt := annotations["dploy.dev/expires-at"]
-
-	status := GetAppStatus(app)
-	url := h.kubeClient.GenerateURL(username, uuid)
-
-	logger.Debug("GetStatus response",
-		"user", username,
-		"env", envName,
-		"status", status,
-		"uuid", uuid,
-		"expiresAt", expiresAt,
-	)
 
 	return c.JSON(models.StatusResponse{
-		UUID:      uuid,
-		Status:    status,
-		URL:       url,
-		ExpiresAt: expiresAt,
+		UUID:      inst.Status.UUID,
+		Status:    instanceStatus(inst),
+		URL:       inst.Status.URL,
+		ExpiresAt: instanceExpiresAt(inst),
+		Owner:     inst.Spec.Owner,
+		Shared:    isShared(c, inst.Spec.Owner),
 	})
 }
 
-// ExtendTTL extends the TTL of a user's environment.
+// ExtendTTL pushes a user's environment expiry forward by the configured amount.
 //
 //	@Summary		Extend environment TTL
-//	@Description	Extend the TTL of a user's environment by configured hours
 //	@Tags			run
 //	@Security		BearerAuth
-//	@Param			env	path	string	true	"Environment name"
+//	@Param			env	path	string	true	"Template name"
 //	@Produce		json
 //	@Success		200	{object}	models.ExtendResponse
-//	@Failure		401	{object}	models.ErrorResponse
-//	@Failure		404	{object}	models.ErrorResponse
 //	@Router			/api/run/{env}/extend [post]
 func (h *RunHandler) ExtendTTL(c *fiber.Ctx) error {
 	username, ok := c.Locals(auth.UserContextKey).(string)
 	if !ok {
-		logger.Debug("Missing user context")
-		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
-			Error: "unauthorized: missing user context",
-		})
+		return unauthorized(c)
 	}
 	envName := c.Params("env")
-	logger.Debug("ExtendTTL request", "user", username, "env", envName)
 
-	app, err := h.kubeClient.GetUserApplication(c.Context(), username, envName)
+	owner, ok := h.resolveOwner(c, envName, username)
+	if !ok {
+		return notFound(c, fmt.Sprintf("environment %q not found", envName))
+	}
+	inst, err := h.kubeClient.GetUserInstance(c.Context(), owner, envName)
 	if err != nil {
-		logger.Error("Failed to get user application", "user", username, "env", envName, "error", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
-			Error: err.Error(),
-		})
+		return internalError(c, err)
+	}
+	if inst == nil {
+		return notFound(c, fmt.Sprintf("environment %q not found", envName))
 	}
 
-	if app == nil {
-		logger.Debug("Environment not found", "user", username, "env", envName)
-		return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{
-			Error: fmt.Sprintf("Environment %s not found", envName),
-		})
+	extendSeconds := h.config.ExtendTTL
+	maxExtends := 0
+	if tmpl, terr := h.kubeClient.GetTemplate(c.Context(), envName); terr == nil && tmpl.Spec.TTL != nil {
+		if tmpl.Spec.TTL.ExtendSeconds > 0 {
+			extendSeconds = int(tmpl.Spec.TTL.ExtendSeconds)
+		}
+		maxExtends = tmpl.Spec.TTL.MaxExtends
 	}
 
-	appName := app.GetName()
-	newExpires, err := h.kubeClient.ExtendApplication(c.Context(), appName)
-	if err != nil {
-		logger.Error("Failed to extend application", "appName", appName, "error", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
-			Error: err.Error(),
-		})
+	newExpires, err := h.kubeClient.ExtendInstance(c.Context(), inst, extendSeconds, maxExtends)
+	switch {
+	case errors.Is(err, kube.ErrUnlimitedTTL):
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Error: err.Error()})
+	case errors.Is(err, kube.ErrMaxExtends):
+		return c.Status(fiber.StatusConflict).JSON(models.ErrorResponse{Error: err.Error()})
+	case err != nil:
+		return internalError(c, err)
 	}
 
-	expiresAt := newExpires.UTC().Format("2006-01-02T15:04:05Z07:00")
-	logger.Info("Extended TTL", "user", username, "env", envName, "newExpires", expiresAt)
-
-	return c.JSON(models.ExtendResponse{
-		ExpiresAt: expiresAt,
-	})
+	logger.Info("Extended TTL", "user", username, "env", envName, "newExpires", newExpires)
+	return c.JSON(models.ExtendResponse{ExpiresAt: newExpires.UTC().Format(time.RFC3339)})
 }
 
-// DeleteEnvironment deletes a user's environment.
+// DeleteEnvironment deletes a user's environment. The operator cleans up the
+// underlying workload via its finalizer.
 //
 //	@Summary		Delete environment
-//	@Description	Delete a user's environment
 //	@Tags			run
 //	@Security		BearerAuth
-//	@Param			env	path	string	true	"Environment name"
+//	@Param			env	path	string	true	"Template name"
 //	@Success		204	"No Content"
-//	@Failure		401	{object}	models.ErrorResponse
-//	@Failure		404	{object}	models.ErrorResponse
 //	@Router			/api/run/{env} [delete]
 func (h *RunHandler) DeleteEnvironment(c *fiber.Ctx) error {
 	username, ok := c.Locals(auth.UserContextKey).(string)
 	if !ok {
-		logger.Debug("Missing user context")
-		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
-			Error: "unauthorized: missing user context",
-		})
+		return unauthorized(c)
 	}
 	envName := c.Params("env")
-	logger.Debug("DeleteEnvironment request", "user", username, "env", envName)
 
-	app, err := h.kubeClient.GetUserApplication(c.Context(), username, envName)
+	owner, ok := h.resolveOwner(c, envName, username)
+	if !ok {
+		return notFound(c, fmt.Sprintf("environment %q not found", envName))
+	}
+	inst, err := h.kubeClient.GetUserInstance(c.Context(), owner, envName)
 	if err != nil {
-		logger.Error("Failed to get user application", "user", username, "env", envName, "error", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
-			Error: err.Error(),
-		})
+		return internalError(c, err)
+	}
+	if inst == nil {
+		return notFound(c, fmt.Sprintf("environment %q not found", envName))
 	}
 
-	if app == nil {
-		logger.Debug("Environment not found", "user", username, "env", envName)
-		return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{
-			Error: fmt.Sprintf("Environment %s not found", envName),
-		})
+	if err := h.kubeClient.DeleteInstance(c.Context(), inst); err != nil {
+		return internalError(c, err)
 	}
 
-	appName := app.GetName()
-	logger.Debug("Deleting application", "appName", appName)
-	if err := h.kubeClient.DeleteApplication(c.Context(), appName); err != nil {
-		logger.Error("Failed to delete application", "appName", appName, "error", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
-			Error: err.Error(),
-		})
-	}
-
-	logger.Info("Deleted application", "user", username, "env", envName)
+	logger.Info("Deleted environment", "user", username, "env", envName)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-func (h *RunHandler) buildResponseFromApp(c *fiber.Ctx, app *unstructured.Unstructured, username string) error {
-	annotations := app.GetAnnotations()
-	uuid := annotations["dploy.dev/uuid"]
-	expiresAt := annotations["dploy.dev/expires-at"]
+func (h *RunHandler) userLimit(tmpl *dployv1alpha1.DployTemplate) int {
+	if tmpl.Spec.MaxInstancesPerUser != nil && *tmpl.Spec.MaxInstancesPerUser > 0 {
+		return *tmpl.Spec.MaxInstancesPerUser
+	}
+	return h.config.MaxEnvironmentsPerUser
+}
 
-	status := GetAppStatus(app)
-	url := h.kubeClient.GenerateURL(username, uuid)
+// resolveOwner resolves the owner key for an environment using the template's
+// ownerClaim (falling back to the username when the template is absent or unset).
+func (h *RunHandler) resolveOwner(c *fiber.Ctx, env, username string) (string, bool) {
+	claim := ""
+	if tmpl, err := h.kubeClient.GetTemplate(c.Context(), env); err == nil {
+		claim = tmpl.Spec.OwnerClaim
+	}
+	return kube.ResolveOwner(claimsMap(c), claim, username)
+}
 
+// claimsMap returns the requester's JWT claims from the request context.
+func claimsMap(c *fiber.Ctx) map[string]any {
+	if m, ok := c.Locals(auth.ClaimsContextKey).(map[string]any); ok && m != nil {
+		return m
+	}
+	return map[string]any{}
+}
+
+// --- shared handler helpers ---
+
+func respondInstance(c *fiber.Ctx, inst *dployv1alpha1.DployInstance) error {
 	return c.JSON(models.RunEnvironmentResponse{
-		UUID:      uuid,
-		Status:    status,
-		URL:       url,
-		ExpiresAt: expiresAt,
+		UUID:      inst.Status.UUID,
+		Status:    instanceStatus(inst),
+		URL:       inst.Status.URL,
+		ExpiresAt: instanceExpiresAt(inst),
+		Owner:     inst.Spec.Owner,
+		Shared:    isShared(c, inst.Spec.Owner),
 	})
+}
+
+// isShared reports whether the instance is owned by an identity other than the
+// requester's personal one (i.e. a team/group-owned, shared environment).
+func isShared(c *fiber.Ctx, owner string) bool {
+	if owner == "" {
+		return false
+	}
+	username, _ := c.Locals(auth.UserContextKey).(string)
+	self, _ := kube.ResolveOwner(claimsMap(c), "", username)
+	return owner != self
+}
+
+// instanceStatus maps the instance phase/health onto the status strings the web
+// UI already understands.
+func instanceStatus(inst *dployv1alpha1.DployInstance) string {
+	switch inst.Status.Phase {
+	case dployv1alpha1.PhaseReady, dployv1alpha1.PhaseClaimed, dployv1alpha1.PhaseAvailable:
+		if inst.Status.Health != "" {
+			return inst.Status.Health
+		}
+		return "Healthy"
+	case dployv1alpha1.PhaseProvisioning:
+		return "Progressing"
+	case dployv1alpha1.PhaseFailed:
+		return "Degraded"
+	case dployv1alpha1.PhaseExpiring:
+		return "Deleting"
+	default: // Pending or empty
+		return "pending"
+	}
+}
+
+// instanceExpiresAt prefers the operator-observed expiry, falling back to the
+// requested one before the first reconcile. Empty means unlimited.
+func instanceExpiresAt(inst *dployv1alpha1.DployInstance) string {
+	t := inst.Status.ExpiresAt
+	if t == nil {
+		t = inst.Spec.ExpiresAt
+	}
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// claimsJSON marshals the requester's JWT claims for DployInstance.Spec.Claims.
+func claimsJSON(c *fiber.Ctx) []byte {
+	raw, ok := c.Locals(auth.ClaimsContextKey).(map[string]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// buildParams collects the template's declared parameters from the query string,
+// applying defaults and enforcing required ones.
+func buildParams(c *fiber.Ctx, tmpl *dployv1alpha1.DployTemplate) (map[string]string, error) {
+	params := map[string]string{}
+	for _, p := range tmpl.Spec.Parameters {
+		v := c.Query(p.Name)
+		if v == "" {
+			v = p.Default
+		}
+		if v == "" && p.Required {
+			return nil, fmt.Errorf("missing required parameter %q", p.Name)
+		}
+		if v != "" {
+			params[p.Name] = v
+		}
+	}
+	return params, nil
+}
+
+func unauthorized(c *fiber.Ctx) error {
+	return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Error: "unauthorized: missing user context"})
+}
+
+func notFound(c *fiber.Ctx, msg string) error {
+	return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Error: msg})
+}
+
+func internalError(c *fiber.Ctx, err error) error {
+	return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: err.Error()})
 }

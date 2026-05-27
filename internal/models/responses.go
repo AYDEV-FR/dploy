@@ -25,6 +25,9 @@ type UserEnvironmentResponse struct {
 	MaxExtends  int  `json:"maxExtends,omitempty"` // Max extensions allowed (-1 = unlimited, 0 = not set)
 	ExtendTTL   int  `json:"extendTTL,omitempty"`  // Seconds added per extension (0 = use default)
 	IsUnlimited bool `json:"isUnlimited"`          // True if TTL is unlimited
+
+	Owner  string `json:"owner,omitempty"`  // Resolved owner key (username, group, …)
+	Shared bool   `json:"shared,omitempty"` // True when owned by someone other than the requester (team-shared)
 }
 
 type UserEnvironmentsListResponse struct {
@@ -38,6 +41,8 @@ type RunEnvironmentResponse struct {
 	Status    string `json:"status"`
 	URL       string `json:"url"`
 	ExpiresAt string `json:"expiresAt"`
+	Owner     string `json:"owner,omitempty"`
+	Shared    bool   `json:"shared,omitempty"`
 }
 
 type StatusResponse struct {
@@ -45,6 +50,8 @@ type StatusResponse struct {
 	Status    string `json:"status"`
 	URL       string `json:"url"`
 	ExpiresAt string `json:"expiresAt"`
+	Owner     string `json:"owner,omitempty"`
+	Shared    bool   `json:"shared,omitempty"`
 }
 
 type ExtendResponse struct {

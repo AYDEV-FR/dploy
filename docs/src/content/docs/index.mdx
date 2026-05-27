@@ -1,0 +1,76 @@
+---
+title: Dploy
+description: Launch ephemeral Kubernetes environments instantly with an operator + API on top of Flux.
+template: splash
+hero:
+  tagline: Launch ephemeral Kubernetes environments instantly — a Kubernetes operator and a thin API on top of Flux.
+  image:
+    file: ../../assets/dploy.svg
+  actions:
+    - text: Get started
+      link: /installation/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/AYDEV-FR/dploy
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What is Dploy?
+
+**Dploy** turns a Helm chart into a self-service, time-boxed environment. A user picks a
+template from the catalog, and Dploy spins up an isolated, per-user deployment with its own
+namespace and URL — then tears it down automatically when its TTL expires.
+
+Dploy is split into two cooperating pieces:
+
+- **The operator** reconciles `DployTemplate` and `DployInstance` custom resources into Flux
+  sources + `HelmRelease`s, manages warm pools, and enforces TTLs.
+- **The API** (GoFiber + OIDC) is a thin, stateless server that authenticates users, lists the
+  catalog, and creates instances. It only ever writes custom resources — it never touches Flux
+  directly.
+
+<CardGrid>
+  <Card title="Operator + API" icon="puzzle">
+    A clean split: the API requests environments by writing CRs; the operator does the actual
+    deployment via Flux. The API physically cannot create a HelmRelease.
+  </Card>
+  <Card title="GitOps-native" icon="github">
+    Charts are pulled from Git or Helm repositories by Flux. Every instance is a real
+    `HelmRelease` you can inspect with `flux` and `kubectl`.
+  </Card>
+  <Card title="Warm pools" icon="approve-check">
+    Pre-provision instances so users get an environment instantly — no cold-start wait.
+  </Card>
+  <Card title="TTL & quotas" icon="setting">
+    Per-template lifetimes, extensions, and per-user quotas. Expired instances clean themselves up.
+  </Card>
+  <Card title="OIDC auth" icon="seti:lock">
+    JWT/OIDC authentication via JWKS. JWT claims flow into your chart values for per-user
+    customization.
+  </Card>
+  <Card title="Templated values" icon="open-book">
+    Render Helm values and connection URLs with Go templates + [sprig](https://masterminds.github.io/sprig/), using the owner, UUID,
+    params and claims.
+  </Card>
+</CardGrid>
+
+## How it works
+
+![Dploy architecture overview: the API writes custom resources, the operator reconciles them into Flux resources that deploy each environment.](/diagrams/dploy-architecture.svg)
+
+Each environment:
+
+1. Gets an immutable 8-character UUID.
+2. Is deployed into its own namespace `<owner>-<template>-<uuid>`.
+3. Is exposed at a URL derived from `connectionURLTemplate` (default `<owner>-<uuid>.<baseDomain>`).
+4. Expires and is garbage-collected after its TTL.
+
+## Next steps
+
+- [Installation](/installation/) — deploy the operator and API with Helm
+- [Configuration](/configuration/) — environment variables and the `OperatorConfig`
+- [Architecture](/concepts/architecture/) — how the pieces fit together
+- [Templates & Instances](/concepts/templates/) — define your catalog

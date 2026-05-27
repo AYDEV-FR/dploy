@@ -6,12 +6,10 @@ metadata:
   labels:
     {{- include "dploy.labels" . | nindent 4 }}
 data:
-  ARGOCD_NAMESPACE: {{ .Values.argocd.namespace | quote }}
-  ARGOCD_PROJECT: {{ .Values.argocd.project | quote }}
+  DPLOY_NAMESPACE: {{ include "dploy.namespace" . | quote }}
   MAX_ENVIRONMENTS_PER_USER: {{ .Values.config.maxEnvironmentsPerUser | quote }}
   DEFAULT_TTL: {{ .Values.config.defaultTTL | quote }}
   EXTEND_TTL: {{ .Values.config.extendTTL | quote }}
-  BASE_DOMAIN: {{ .Values.config.baseDomain | quote }}
   SERVER_HOST: {{ .Values.config.serverHost | quote }}
   SERVER_PORT: {{ .Values.config.serverPort | quote }}
   JWT_AUDIENCE: {{ .Values.auth.jwtAudience | quote }}

@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"errors"
 
 	"github.com/AYDEV-FR/dploy/internal/auth"
-	"github.com/AYDEV-FR/dploy/internal/cleanup"
 	"github.com/AYDEV-FR/dploy/internal/config"
 	"github.com/AYDEV-FR/dploy/internal/handlers"
 	"github.com/AYDEV-FR/dploy/internal/kube"
@@ -18,7 +16,7 @@ import (
 
 func main() {
 	// Load configuration
-	cfg, err := config.Load("config/environments.yaml")
+	cfg, err := config.Load()
 	if err != nil {
 		panic("Failed to load configuration: " + err.Error())
 	}
@@ -27,10 +25,7 @@ func main() {
 	logger.Init(cfg.Debug)
 	defer logger.Sync()
 
-	logger.Info("Configuration loaded",
-		"argocdNamespace", cfg.ArgoCDNamespace,
-		"argocdProject", cfg.ArgoCDProject,
-	)
+	logger.Info("Configuration loaded", "namespace", cfg.Namespace)
 
 	// Initialize Kubernetes client
 	kubeClient, err := kube.NewClient(cfg)
@@ -39,10 +34,6 @@ func main() {
 	}
 
 	logger.Info("Kubernetes client initialized")
-
-	// Start TTL cleanup worker
-	cleanupWorker := cleanup.NewWorker(kubeClient, cfg.CleanupInterval)
-	go cleanupWorker.Start(context.Background())
 
 	// Initialize JWT validator
 	jwtValidator := auth.NewJWTValidator(cfg.JWKSUrl, cfg.JWTIssuer, cfg.JWTAudience, cfg.JWTUsernameClaim)
@@ -135,7 +126,7 @@ func main() {
 	logger.Debug("Server configuration",
 		"host", cfg.ServerHost,
 		"port", cfg.ServerPort,
-		"baseDomain", cfg.BaseDomain,
+		"namespace", cfg.Namespace,
 	)
 
 	if err := app.Listen(addr); err != nil {

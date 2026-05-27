@@ -1,7 +1,10 @@
-.PHONY: help build build-go test docker-build docker-load logs port-forward clean frontend-install frontend-build frontend-dev
+.PHONY: help build build-go build-operator test docker-build docker-build-operator docker-load logs port-forward clean frontend-install frontend-build frontend-dev manifests generate install uninstall
 
 # Detect container runtime
 CONTAINER_RUNTIME := $(shell command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && echo docker || echo podman)
+
+# Operator codegen (controller-gen is run via `go run` so no global install is required)
+CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.1
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -23,6 +26,23 @@ build: frontend-build ## Build the Go binary (with frontend)
 build-go: ## Build only the Go binary (skip frontend)
 	go build -o dploy-api ./cmd/api
 
+build-operator: ## Build the operator binary
+	go build -o dploy-operator ./cmd/operator
+
+# Operator code generation
+manifests: ## Generate CRD manifests and RBAC from kubebuilder markers
+	$(CONTROLLER_GEN) crd paths=./api/... output:crd:dir=config/crd/bases
+	$(CONTROLLER_GEN) rbac:roleName=dploy-operator paths=./internal/controller/... output:rbac:dir=config/rbac
+
+generate: ## Generate deepcopy (zz_generated.deepcopy.go) from kubebuilder markers
+	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths=./api/...
+
+install: manifests ## Install CRDs into the current kube context
+	kubectl apply -f config/crd/bases
+
+uninstall: ## Remove CRDs from the current kube context
+	kubectl delete -f config/crd/bases --ignore-not-found
+
 run: ## Run locally (requires env vars)
 	go run ./cmd/api/main.go
 
@@ -30,9 +50,13 @@ test: ## Run tests
 	go test -v ./...
 
 # Docker/Podman
-docker-build: ## Build container image
+docker-build: ## Build API container image
 	@echo "Building with $(CONTAINER_RUNTIME)..."
 	$(CONTAINER_RUNTIME) build -t dploy-api:local .
+
+docker-build-operator: ## Build operator container image
+	@echo "Building operator with $(CONTAINER_RUNTIME)..."
+	$(CONTAINER_RUNTIME) build -f Dockerfile.operator -t dploy-operator:local .
 
 docker-load: docker-build ## Build and load image into Kind
 	@echo "Loading image into Kind with $(CONTAINER_RUNTIME)..."

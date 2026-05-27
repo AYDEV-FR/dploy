@@ -7,7 +7,12 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-const UserContextKey = "username"
+const (
+	// UserContextKey holds the sanitized username in the request context.
+	UserContextKey = "username"
+	// ClaimsContextKey holds the requester's JWT claims (map[string]any).
+	ClaimsContextKey = "claims"
+)
 
 func Middleware(validator *JWTValidator) fiber.Handler {
 	return func(c *fiber.Ctx) error {
@@ -34,7 +39,7 @@ func Middleware(validator *JWTValidator) fiber.Handler {
 		}
 
 		// Validate token
-		username, err := validator.ValidateToken(tokenString)
+		username, claims, err := validator.Validate(tokenString)
 		if err != nil {
 			logger.Warn("JWT validation failed", "error", err)
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
@@ -44,6 +49,7 @@ func Middleware(validator *JWTValidator) fiber.Handler {
 
 		logger.Debug("Authenticated user", "user", username)
 		c.Locals(UserContextKey, username)
+		c.Locals(ClaimsContextKey, claims)
 		return c.Next()
 	}
 }

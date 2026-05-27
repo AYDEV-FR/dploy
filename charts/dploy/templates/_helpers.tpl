@@ -58,3 +58,40 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Namespace where DployTemplate/DployInstance CRs live (defaults to the release namespace).
+*/}}
+{{- define "dploy.namespace" -}}
+{{- default .Release.Namespace .Values.config.namespace }}
+{{- end }}
+
+{{/*
+Operator names, labels and service account.
+*/}}
+{{- define "dploy.operator.fullname" -}}
+{{- printf "%s-operator" (include "dploy.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "dploy.operator.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "dploy.name" . }}-operator
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{- define "dploy.operator.labels" -}}
+helm.sh/chart: {{ include "dploy.chart" . }}
+{{ include "dploy.operator.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/component: operator
+{{- end }}
+
+{{- define "dploy.operator.serviceAccountName" -}}
+{{- if .Values.operator.serviceAccount.create }}
+{{- default (include "dploy.operator.fullname" .) .Values.operator.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.operator.serviceAccount.name }}
+{{- end }}
+{{- end }}

@@ -41,10 +41,6 @@ spec:
                 name: {{ include "dploy.fullname" . }}-config
             - secretRef:
                 name: {{ include "dploy.fullname" . }}-secrets
-          volumeMounts:
-            - name: environments
-              mountPath: /app/config
-              readOnly: true
           livenessProbe:
             httpGet:
               path: /health
@@ -59,10 +55,6 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      volumes:
-        - name: environments
-          configMap:
-            name: {{ include "dploy.fullname" . }}-environments
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

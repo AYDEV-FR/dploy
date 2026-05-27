@@ -3,11 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
-
-	"github.com/AYDEV-FR/dploy/internal/models"
-	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
@@ -24,18 +20,13 @@ type Config struct {
 	OIDCClientSecret string
 	OIDCRedirectURL  string
 
-	// Kubernetes
-	ArgoCDNamespace string
-	ArgoCDProject   string
+	// Kubernetes: the namespace where DployTemplate and DployInstance CRs live.
+	Namespace string
 
-	// Defaults
+	// Defaults — fallbacks used only when a DployTemplate omits the value.
 	MaxEnvironmentsPerUser int
-	DefaultTTL             int // TTL in seconds
+	DefaultTTL             int // initial TTL in seconds
 	ExtendTTL              int // TTL extension in seconds
-	CleanupInterval        int // Cleanup check interval in seconds
-
-	// Ingress
-	BaseDomain string
 
 	// Server
 	ServerHost string
@@ -43,12 +34,12 @@ type Config struct {
 
 	// Debug
 	Debug bool
-
-	// Environments
-	Environments []models.Environment
 }
 
-func Load(environmentsPath string) (*Config, error) {
+// Load reads configuration from the environment. The catalog and instance state
+// now live in Kubernetes (DployTemplate/DployInstance CRs), so there is no longer
+// an environments file to parse.
+func Load() (*Config, error) {
 	cfg := &Config{
 		// JWT
 		JWKSUrl:          getEnv("JWKS_URL", ""),
@@ -64,17 +55,12 @@ func Load(environmentsPath string) (*Config, error) {
 		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URL", "http://localhost:8080/auth/callback"),
 
 		// Kubernetes
-		ArgoCDNamespace: getEnv("ARGOCD_NAMESPACE", "argocd"),
-		ArgoCDProject:   getEnv("ARGOCD_PROJECT", "dploy"),
+		Namespace: getEnv("DPLOY_NAMESPACE", "dploy-system"),
 
 		// Defaults
 		MaxEnvironmentsPerUser: getEnvAsInt("MAX_ENVIRONMENTS_PER_USER", 5),
-		DefaultTTL:             getEnvAsInt("DEFAULT_TTL", 86400),   // 24 hours in seconds
-		ExtendTTL:              getEnvAsInt("EXTEND_TTL", 7200),     // 2 hours in seconds
-		CleanupInterval:        getEnvAsInt("CLEANUP_INTERVAL", 60), // 1 minute in seconds
-
-		// Ingress
-		BaseDomain: getEnv("BASE_DOMAIN", "env.dploy.dev"),
+		DefaultTTL:             getEnvAsInt("DEFAULT_TTL", 86400), // 24h
+		ExtendTTL:              getEnvAsInt("EXTEND_TTL", 7200),   // 2h
 
 		// Server
 		ServerHost: getEnv("SERVER_HOST", "0.0.0.0"),
@@ -90,21 +76,6 @@ func Load(environmentsPath string) (*Config, error) {
 	if cfg.JWTIssuer == "" {
 		return nil, fmt.Errorf("JWT_ISSUER is required")
 	}
-
-	// Load environments from YAML file
-	// Clean the path to prevent directory traversal attacks (G304).
-	cleanPath := filepath.Clean(environmentsPath)
-	data, err := os.ReadFile(cleanPath) // #nosec G304 -- path is cleaned above
-	if err != nil {
-		return nil, fmt.Errorf("failed to read environments file: %w", err)
-	}
-
-	var envConfig models.EnvironmentsConfig
-	if err := yaml.Unmarshal(data, &envConfig); err != nil {
-		return nil, fmt.Errorf("failed to parse environments file: %w", err)
-	}
-
-	cfg.Environments = envConfig.Environments
 
 	return cfg, nil
 }

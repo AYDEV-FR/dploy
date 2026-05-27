@@ -1,12 +1,16 @@
+// Copyright the Dploy authors.
+// SPDX-License-Identifier: MIT
+
 package handlers
 
 import (
-	"strconv"
+	"github.com/gofiber/fiber/v2"
 
+	dployv1alpha1 "github.com/AYDEV-FR/dploy/api/v1alpha1"
 	"github.com/AYDEV-FR/dploy/internal/auth"
+	"github.com/AYDEV-FR/dploy/internal/config"
 	"github.com/AYDEV-FR/dploy/internal/kube"
 	"github.com/AYDEV-FR/dploy/internal/models"
-	"github.com/gofiber/fiber/v2"
 )
 
 type EnvironmentsHandler struct {
@@ -17,144 +21,129 @@ func NewEnvironmentsHandler(kubeClient *kube.Client) *EnvironmentsHandler {
 	return &EnvironmentsHandler{kubeClient: kubeClient}
 }
 
-// ListAvailable returns a list of all available environments.
+// ListAvailable returns the catalog: enabled, visible DployTemplates.
 //
 //	@Summary		List available environments
-//	@Description	Get list of all enabled environments
 //	@Tags			environments
 //	@Produce		json
 //	@Success		200	{array}	models.AvailableEnvironmentResponse
 //	@Router			/api/environments/available [get]
 func (h *EnvironmentsHandler) ListAvailable(c *fiber.Ctx) error {
-	envs := h.kubeClient.ListAvailableEnvironments()
-	defaultTTL := h.kubeClient.GetConfig().DefaultTTL
+	tmpls, err := h.kubeClient.ListVisibleTemplates(c.Context())
+	if err != nil {
+		return internalError(c, err)
+	}
+	cfg := h.kubeClient.GetConfig()
 
-	response := make([]models.AvailableEnvironmentResponse, len(envs))
-	for i, env := range envs {
-		// Parse TTL configuration
-		ttl := defaultTTL
-		extendTTL := 0
-		maxExtends := 0
-		isUnlimited := false
-
-		if ttlConfig := env.ParseTTL(); ttlConfig != nil {
-			ttl = ttlConfig.TTL
-			isUnlimited = ttlConfig.IsUnlimited()
-			if ttlConfig.HasExtend {
-				extendTTL = ttlConfig.ExtendTTL
-			}
-			if ttlConfig.HasMax {
-				maxExtends = ttlConfig.MaxExtends
-			}
-		}
-
-		response[i] = models.AvailableEnvironmentResponse{
-			Name:        env.Name,
-			Description: env.Description,
-			Icon:        env.Icon,
-			Category:    env.Category,
+	response := make([]models.AvailableEnvironmentResponse, 0, len(tmpls))
+	for i := range tmpls {
+		t := &tmpls[i]
+		ttl, extend, maxExt, unlimited := templateTTL(t, cfg)
+		response = append(response, models.AvailableEnvironmentResponse{
+			Name:        t.Name,
+			Description: t.Spec.Description,
+			Icon:        t.Spec.Icon,
+			Category:    t.Spec.Category,
 			TTL:         ttl,
-			ExtendTTL:   extendTTL,
-			MaxExtends:  maxExtends,
-			IsUnlimited: isUnlimited,
-		}
+			ExtendTTL:   extend,
+			MaxExtends:  maxExt,
+			IsUnlimited: unlimited,
+		})
 	}
 
 	return c.JSON(response)
 }
 
-// ListUserEnvironments returns all environments for the authenticated user.
+// ListUserEnvironments returns all instances owned by the authenticated user.
 //
 //	@Summary		List user's environments
-//	@Description	Get list of all environments for authenticated user
 //	@Tags			environments
 //	@Security		BearerAuth
 //	@Produce		json
-//	@Success		200	{array}		models.UserEnvironmentResponse
-//	@Failure		401	{object}	models.ErrorResponse
+//	@Success		200	{array}	models.UserEnvironmentResponse
 //	@Router			/api/environments [get]
 func (h *EnvironmentsHandler) ListUserEnvironments(c *fiber.Ctx) error {
 	username, ok := c.Locals(auth.UserContextKey).(string)
 	if !ok {
-		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{
-			Error: "unauthorized: missing user context",
-		})
+		return unauthorized(c)
 	}
 
-	apps, err := h.kubeClient.ListUserApplications(c.Context(), username)
+	cfg := h.kubeClient.GetConfig()
+
+	// Index templates once (for icon/description/TTL) and collect the owner claims
+	// they use, so we can resolve every identity the requester owns under.
+	tmplByName := map[string]*dployv1alpha1.DployTemplate{}
+	var ownerClaims []string
+	if all, terr := h.kubeClient.ListTemplates(c.Context()); terr == nil {
+		for i := range all {
+			tmplByName[all[i].Name] = &all[i]
+			if all[i].Spec.OwnerClaim != "" {
+				ownerClaims = append(ownerClaims, all[i].Spec.OwnerClaim)
+			}
+		}
+	}
+
+	// List everything the requester owns: their username plus any group/claim
+	// values used as owner keys (personal + team-shared environments).
+	identities := kube.Identities(claimsMap(c), ownerClaims, username)
+	insts, err := h.kubeClient.ListOwnedInstances(c.Context(), identities)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
-			Error: err.Error(),
-		})
+		return internalError(c, err)
 	}
 
-	environments := make([]models.UserEnvironmentResponse, 0)
-	for _, app := range apps.Items {
-		labels := app.GetLabels()
-		annotations := app.GetAnnotations()
+	// The requester's personal owner key, to flag team-shared instances.
+	selfOwner, _ := kube.ResolveOwner(claimsMap(c), "", username)
 
-		status := GetAppStatus(&app)
+	environments := make([]models.UserEnvironmentResponse, 0, len(insts))
+	for i := range insts {
+		inst := &insts[i]
 
-		envName := labels["dploy.dev/env"]
-		uuid := annotations["dploy.dev/uuid"]
-		expiresAt := annotations["dploy.dev/expires-at"]
-		url := h.kubeClient.GenerateURL(username, uuid)
-
-		// Get icon and description from environment template
-		icon := "default"
-		description := ""
-		if env := h.kubeClient.GetEnvironmentByName(envName); env != nil {
-			icon = env.Icon
-			description = env.Description
+		icon, description := "default", ""
+		extendTTL, maxExtends := cfg.ExtendTTL, 0
+		if t := tmplByName[inst.Spec.TemplateRef]; t != nil {
+			icon = t.Spec.Icon
+			description = t.Spec.Description
+			_, extendTTL, maxExtends, _ = templateTTL(t, cfg)
 		}
-
-		// Parse extend count
-		extendCount := 0
-		if extendCountStr := annotations["dploy.dev/extend-count"]; extendCountStr != "" {
-			if count, err := strconv.Atoi(extendCountStr); err == nil {
-				extendCount = count
-			}
-		}
-
-		// Parse max extends (-1 = unlimited, 0 = not set/use default)
-		maxExtends := 0
-		if maxExtendsStr := annotations["dploy.dev/max-extends"]; maxExtendsStr != "" {
-			if max, err := strconv.Atoi(maxExtendsStr); err == nil {
-				maxExtends = max
-			}
-		}
-
-		// Parse extend TTL (0 = use default)
-		extendTTL := 0
-		if extendTTLStr := annotations["dploy.dev/extend-ttl"]; extendTTLStr != "" {
-			if ttl, err := strconv.Atoi(extendTTLStr); err == nil {
-				extendTTL = ttl
-			}
-		}
-
-		// Check if unlimited (no expires-at annotation)
-		isUnlimited := expiresAt == ""
 
 		environments = append(environments, models.UserEnvironmentResponse{
-			Name:        envName,
+			Name:        inst.Spec.TemplateRef,
 			Description: description,
-			UUID:        uuid,
-			Status:      status,
-			URL:         url,
-			ExpiresAt:   expiresAt,
+			UUID:        inst.Status.UUID,
+			Status:      instanceStatus(inst),
+			URL:         inst.Status.URL,
+			ExpiresAt:   instanceExpiresAt(inst),
 			Icon:        icon,
-			ExtendCount: extendCount,
+			ExtendCount: kube.ExtendCount(inst),
 			MaxExtends:  maxExtends,
 			ExtendTTL:   extendTTL,
-			IsUnlimited: isUnlimited,
+			IsUnlimited: inst.Spec.TTLSeconds == -1,
+			Owner:       inst.Spec.Owner,
+			Shared:      inst.Spec.Owner != "" && inst.Spec.Owner != selfOwner,
 		})
 	}
 
-	response := models.UserEnvironmentsListResponse{
+	return c.JSON(models.UserEnvironmentsListResponse{
 		Environments: environments,
 		Count:        len(environments),
-		Limit:        h.kubeClient.GetConfig().MaxEnvironmentsPerUser,
-	}
+		Limit:        cfg.MaxEnvironmentsPerUser,
+	})
+}
 
-	return c.JSON(response)
+// templateTTL resolves the effective TTL display values for a template, falling
+// back to the API defaults. maxExtends 0 means unlimited.
+func templateTTL(tmpl *dployv1alpha1.DployTemplate, cfg *config.Config) (ttl, extend, maxExt int, unlimited bool) {
+	ttl = cfg.DefaultTTL
+	extend = cfg.ExtendTTL
+	if tmpl.Spec.TTL != nil {
+		if tmpl.Spec.TTL.Seconds != 0 {
+			ttl = int(tmpl.Spec.TTL.Seconds)
+		}
+		if tmpl.Spec.TTL.ExtendSeconds != 0 {
+			extend = int(tmpl.Spec.TTL.ExtendSeconds)
+		}
+		maxExt = tmpl.Spec.TTL.MaxExtends
+	}
+	unlimited = ttl == -1
+	return ttl, extend, maxExt, unlimited
 }

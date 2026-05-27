@@ -1,0 +1,219 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: dployinstances.dploy.dev
+spec:
+  group: dploy.dev
+  names:
+    kind: DployInstance
+    listKind: DployInstanceList
+    plural: dployinstances
+    shortNames:
+    - dinst
+    singular: dployinstance
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.templateRef
+      name: Template
+      type: string
+    - jsonPath: .spec.owner
+      name: Owner
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.url
+      name: URL
+      type: string
+    - jsonPath: .status.expiresAt
+      name: Expires
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: DployInstance is a single deployed (or pooled) environment derived
+          from a DployTemplate.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DployInstanceSpec is the desired state of a single deployed
+              environment.
+            properties:
+              claims:
+                description: Claims is a snapshot of the requester's JWT claims, exposed
+                  to value templates as `.Claims`.
+                x-kubernetes-preserve-unknown-fields: true
+              expiresAt:
+                description: ExpiresAt is the absolute expiry time. Empty for unlimited
+                  TTL or an unclaimed pool member.
+                format: date-time
+                type: string
+              owner:
+                description: Owner is the sanitized username that owns this instance.
+                  Empty for an unclaimed pool member.
+                type: string
+              params:
+                additionalProperties:
+                  type: string
+                description: Params holds request-supplied parameter values, exposed
+                  to value templates as `.Params`.
+                type: object
+              pooled:
+                description: Pooled marks this instance as a member of a template's
+                  warm pool.
+                type: boolean
+              templateRef:
+                description: TemplateRef is the name of the DployTemplate (in the
+                  same namespace) this instance derives from.
+                minLength: 1
+                type: string
+              ttlSeconds:
+                description: TTLSeconds is the resolved initial lifetime in seconds.
+                  -1 means unlimited.
+                format: int64
+                type: integer
+            required:
+            - templateRef
+            type: object
+          status:
+            description: DployInstanceStatus is the observed state of a deployed environment.
+            properties:
+              conditions:
+                description: Conditions represent the latest observations of the instance's
+                  state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              engine:
+                description: Engine is the engine that materialized this instance.
+                enum:
+                - argocd
+                - flux
+                type: string
+              engineRef:
+                description: EngineRef is the name of the underlying engine resource
+                  (Application or HelmRelease).
+                type: string
+              expiresAt:
+                description: ExpiresAt mirrors the effective expiry observed by the
+                  controller.
+                format: date-time
+                type: string
+              extendCount:
+                description: ExtendCount is the number of times the TTL has been extended.
+                type: integer
+              health:
+                description: Health mirrors the engine-reported health (e.g. Healthy,
+                  Progressing, Degraded).
+                type: string
+              namespace:
+                description: Namespace is the workload namespace created for this
+                  instance.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is a high-level lifecycle summary.
+                enum:
+                - Pending
+                - Provisioning
+                - Ready
+                - Available
+                - Claimed
+                - Expiring
+                - Failed
+                type: string
+              sync:
+                description: Sync mirrors the engine-reported sync state (e.g. Synced,
+                  OutOfSync).
+                type: string
+              url:
+                description: URL is the public ingress URL of the instance.
+                type: string
+              uuid:
+                description: UUID is the short unique identifier assigned by the operator.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
