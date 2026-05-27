@@ -557,6 +557,12 @@ body {
     color: var(--warning);
 }
 
+.meta-badge.meta-shared {
+    background: rgba(168, 85, 247, 0.12);
+    border-color: rgba(168, 85, 247, 0.5);
+    color: #c084fc;
+}
+
 .env-list-actions {
     display: flex;
     gap: 0.5rem;

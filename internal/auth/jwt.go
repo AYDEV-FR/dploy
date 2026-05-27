@@ -100,7 +100,7 @@ func (v *JWTValidator) getJWKS() (*JWKS, error) {
 }
 
 //nolint:gocyclo // Complexity is necessary for proper JWT validation with multiple security checks
-func (v *JWTValidator) ValidateToken(tokenString string) (string, error) {
+func (v *JWTValidator) Validate(tokenString string) (string, map[string]any, error) {
 	logger.Debug("Validating JWT token")
 
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
@@ -146,48 +146,54 @@ func (v *JWTValidator) ValidateToken(tokenString string) (string, error) {
 
 	if err != nil {
 		logger.Debug("Token parsing failed", "error", err)
-		return "", fmt.Errorf("token parsing failed: %w", err)
+		return "", nil, fmt.Errorf("token parsing failed: %w", err)
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok || !token.Valid {
 		logger.Debug("Invalid token claims")
-		return "", fmt.Errorf("invalid token claims")
+		return "", nil, fmt.Errorf("invalid token claims")
 	}
 
 	// Validate issuer
 	iss, ok := claims["iss"].(string)
 	if !ok {
 		logger.Debug("Missing iss claim")
-		return "", fmt.Errorf("missing iss claim")
+		return "", nil, fmt.Errorf("missing iss claim")
 	}
 	if iss != v.issuer {
 		logger.Debug("Invalid issuer", "expected", v.issuer, "got", iss)
-		return "", fmt.Errorf("invalid issuer: expected %s, got %s", v.issuer, iss)
+		return "", nil, fmt.Errorf("invalid issuer: expected %s, got %s", v.issuer, iss)
 	}
 
 	// Validate audience
 	aud, ok := claims["aud"].(string)
 	if !ok {
 		logger.Debug("Missing aud claim")
-		return "", fmt.Errorf("missing aud claim")
+		return "", nil, fmt.Errorf("missing aud claim")
 	}
 	if aud != v.audience {
 		logger.Debug("Invalid audience", "expected", v.audience, "got", aud)
-		return "", fmt.Errorf("invalid audience: expected %s, got %s", v.audience, aud)
+		return "", nil, fmt.Errorf("invalid audience: expected %s, got %s", v.audience, aud)
 	}
 
 	// Extract username
 	username, ok := claims[v.usernameClaim].(string)
 	if !ok {
 		logger.Debug("Missing or invalid username claim", "claim", v.usernameClaim)
-		return "", fmt.Errorf("missing or invalid %s claim", v.usernameClaim)
+		return "", nil, fmt.Errorf("missing or invalid %s claim", v.usernameClaim)
 	}
 
 	sanitizedUsername := SanitizeUsername(username)
 	logger.Debug("Token validated", "user", sanitizedUsername, "rawUser", username)
 
-	return sanitizedUsername, nil
+	return sanitizedUsername, map[string]any(claims), nil
+}
+
+// ValidateToken validates a token and returns only the sanitized username.
+func (v *JWTValidator) ValidateToken(tokenString string) (string, error) {
+	user, _, err := v.Validate(tokenString)
+	return user, err
 }
 
 // jwkToRSAPublicKey converts a JWK to an RSA public key.

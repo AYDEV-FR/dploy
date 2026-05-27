@@ -36,8 +36,7 @@ func (h *HealthHandler) Health(c *fiber.Ctx) error {
 //	@Failure		503	{object}	models.ErrorResponse
 //	@Router			/ready [get]
 func (h *HealthHandler) Ready(c *fiber.Ctx) error {
-	envs := h.kubeClient.ListAvailableEnvironments()
-	if envs == nil {
+	if err := h.kubeClient.Ready(c.Context()); err != nil {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(models.ErrorResponse{
 			Error: "Service not ready",
 		})
