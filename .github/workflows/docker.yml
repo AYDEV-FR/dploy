@@ -2,7 +2,7 @@ name: Docker
 
 on:
   push:
-    branches: [main, master]
+    branches: ['**'] # every branch: pushes an image tagged with the branch name for testing
     tags: ['v*']
   pull_request:
     branches: [main, master]
