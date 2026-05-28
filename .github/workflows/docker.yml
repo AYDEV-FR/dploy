@@ -71,22 +71,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
-
-      - name: Generate SBOM
-        if: github.event_name != 'pull_request'
-        continue-on-error: true
-        uses: anchore/sbom-action@v0
-        with:
-          image: ${{ env.REGISTRY }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}
-          format: spdx-json
-          output-file: sbom-${{ matrix.component }}.spdx.json
-
-      - name: Upload SBOM
-        if: github.event_name != 'pull_request'
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom-${{ matrix.component }}
-          path: sbom-${{ matrix.component }}.spdx.json
-          retention-days: 30
-          if-no-files-found: ignore
+          # Generate the SBOM (and provenance) during the build and attach them to
+          # the pushed image as OCI attestations — no fragile registry re-pull.
+          sbom: true
+          provenance: mode=max
