@@ -8,6 +8,10 @@ on:
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
+env:
+  # Run JS-based actions on Node 24 now (silences the Node 20 deprecation warning)
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: read
   pages: write
