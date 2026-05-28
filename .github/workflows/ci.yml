@@ -8,6 +8,8 @@ on:
 
 env:
   GO_VERSION: '1.26'
+  # Run JS-based actions on Node 24 now (silences the Node 20 deprecation warning)
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   lint:
