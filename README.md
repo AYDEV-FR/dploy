@@ -1,132 +1,135 @@
 # Dploy
 
-All-in-one solution for managing ephemeral Kubernetes environments via ArgoCD Applications and Git-based Helm charts.
+Launch ephemeral Kubernetes environments on demand — a Kubernetes **operator** plus a thin **API**, built on top of **Flux**.
+
+Dploy turns a Helm chart into a self-service, time-boxed environment: a user picks a template from the catalog, and Dploy spins up an isolated, per-user deployment with its own namespace and URL, then tears it down automatically when its TTL expires.
 
 ## Features
 
-- **Embedded Web UI** - Minimalist web interface (vanilla JS)
-- **Single Container** - API + Frontend in one image
-- **Fast** - Built with GoFiber framework
-- **Secure** - JWT/OIDC authentication via JWKS
-- **Simple Config** - YAML-based environments, no CRDs
-- **Git Charts** - Helm charts from Git repositories
-- **GitOps Native** - ArgoCD manages deployments
-- **Auto Cleanup** - Built-in TTL enforcement and quotas
+- **Operator + API split** — a stateless GoFiber API writes custom resources; a controller-runtime operator reconciles them. The API has **no Flux permissions** (an auditable RBAC boundary — a compromised API can't create arbitrary workloads).
+- **Flux-native GitOps** — every environment is a real Flux `HelmRelease` from a Git or Helm/OCI chart source, inspectable with `flux` and `kubectl`.
+- **CRD-driven** — `DployTemplate` (the catalog) and `DployInstance` (a single environment), drivable via the API or plain `kubectl`.
+- **Warm pools** — pre-provision instances so users claim an environment instantly, with no cold-start wait.
+- **OIDC auth** — JWT validation via JWKS; the requester's claims flow into your chart values for per-user customization.
+- **Templated values & URLs** — render Helm values and connection URLs with Go templates + [sprig](https://masterminds.github.io/sprig/), using the owner, UUID, params, and claims.
+- **TTL, extensions & quotas** — per-template lifetimes, `/extend`, and per-user limits; expired instances clean themselves up via a finalizer.
+- **Embedded web UI** — a minimalist interface served directly by the API image.
 
-## Quick Start
+## How it works
 
-### Local Development (Kind)
+1. A user picks a template (the catalog is the set of enabled `DployTemplate`s) through the API or UI.
+2. The API creates a `DployInstance` custom resource — it never touches Flux directly.
+3. The operator reconciles it into a Flux source + `HelmRelease`, deployed into a dedicated namespace `<owner>-<template>-<uuid>`.
+4. The environment is exposed at `<owner>-<uuid>.<baseDomain>` (or a custom `connectionURLTemplate`).
+5. When the TTL elapses, the operator's finalizer removes the `HelmRelease` and the workload namespace.
+
+See the [Architecture](https://dploy.dev/concepts/architecture/) docs for the full design.
+
+## Quick start (local)
 
 ```bash
 git clone https://github.com/AYDEV-FR/dploy.git
 cd dploy
-./dev/setup.sh
+
+make setup   # Kind cluster + Flux + Dploy (operator + API)
 ```
 
-Access the UI at `http://dploy.localhost`
+Then follow the [Quick Start guide](https://dploy.dev/quick-start/) to fetch a token and launch your first environment. `make port-forward` exposes the API at `http://localhost:8080`.
 
-### Production (Helm)
+## Installation (Helm)
+
+**Prerequisites:** a Kubernetes cluster (1.30+), the Flux `source-controller` and `helm-controller`, an OIDC provider, and an Ingress or Gateway API controller.
 
 ```bash
-# Add Helm repository
-helm repo add dploy https://aydev-fr.github.io/dploy
-helm repo update
+# Dploy only needs these two Flux controllers
+flux install --components=source-controller,helm-controller
 
-# Install
-helm install dploy dploy/dploy \
-  --namespace dploy-system \
-  --create-namespace \
+# Install the operator + API + CRDs from the chart
+helm install dploy ./charts/dploy \
+  --namespace dploy-system --create-namespace \
   --set auth.jwksURL="https://your-oidc.com/keys" \
   --set auth.jwtIssuer="https://your-oidc.com" \
+  --set auth.oidcClientID="dploy" \
+  --set auth.oidcClientSecret="your-client-secret" \
   --set ingress.enabled=true \
   --set ingress.host="dploy.your-domain.com"
 ```
 
-### ArgoCD Application
+Container images are published to GHCR: `ghcr.io/aydev-fr/dploy` (API) and `ghcr.io/aydev-fr/dploy-operator` (operator). Full options are in the [Installation](https://dploy.dev/installation/) docs.
+
+## Define a template
+
+A `DployTemplate` adds an entry to the catalog. This one deploys the public [podinfo](https://github.com/stefanprodan/podinfo) chart on demand:
 
 ```yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
+apiVersion: dploy.dev/v1alpha1
+kind: DployTemplate
 metadata:
-  name: dploy
-  namespace: argocd
+  name: podinfo
+  namespace: dploy-system
 spec:
-  project: default
-  source:
-    repoURL: https://aydev-fr.github.io/dploy
-    chart: dploy
-    targetRevision: 0.1.0
-    helm:
-      valuesObject:
-        auth:
-          jwksURL: "https://your-oidc.com/keys"
-          jwtIssuer: "https://your-oidc.com"
-        ingress:
-          enabled: true
-          host: "dploy.your-domain.com"
-        environments:
-          - name: webterm
-            description: "Web Terminal"
-            chart: "github.com/AYDEV-FR/dploy-charts/webshell@main"
-            enabled: true
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: dploy-system
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-    syncOptions:
-      - CreateNamespace=true
+  displayName: "Podinfo"
+  description: "Tiny demo web app"
+  enabled: true
+  method: on-demand          # or "pool" for a warm pool
+  chart:
+    type: helm
+    repoURL: https://stefanprodan.github.io/podinfo
+    chart: podinfo
+    targetRevision: "6.7.1"
+  ttl:
+    seconds: 3600
+  valuesTemplate: |
+    ui:
+      message: "Hello {{ .Owner }} — instance {{ .UUID }}"
 ```
 
-## How It Works
+See [Templates & Instances](https://dploy.dev/concepts/templates/) for git charts, pools, parameters, and ownership.
 
-Each environment request:
+## API endpoints
 
-1. Gets a unique 8-character UUID
-2. Creates an ArgoCD Application
-3. Deploys to namespace: `{user}-{env}-{uuid}`
-4. Gets ingress: `https://{user}-{uuid}.{BASE_DOMAIN}`
-5. Auto-deletes after TTL expires
+`:env` always refers to a **template name**. Protected endpoints require a JWT Bearer token.
 
-## API Endpoints
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/health` | — | Liveness probe |
+| GET | `/ready` | — | Readiness probe (checks cluster connectivity) |
+| GET | `/api/environments/available` | — | List visible, enabled templates |
+| GET | `/api/environments` | ✓ | List the caller's environments |
+| GET | `/run/:env` | ✓ | Create/claim, or return the caller's environment |
+| GET | `/run/:env/status` | ✓ | Status of the caller's environment |
+| POST | `/run/:env/extend` | ✓ | Extend the TTL |
+| DELETE | `/run/:env` | ✓ | Delete the caller's environment |
+| GET | `/auth/login` | — | Start the OIDC authorization-code flow |
+| GET | `/auth/callback` | — | OIDC provider callback |
+| GET | `/auth/logout` | — | Clear client-side auth state |
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Liveness probe |
-| GET | `/ready` | Readiness probe |
-| GET | `/api/environments/available` | List available environments |
-| GET | `/api/environments` | List user's active environments |
-| GET | `/run/:env` | Create or get environment |
-| GET | `/run/:env/status` | Get environment status |
-| POST | `/run/:env/extend` | Extend TTL |
-| DELETE | `/run/:env` | Delete environment |
+Full reference: [API Endpoints](https://dploy.dev/api/endpoints/).
 
 ## Development
 
 ```bash
-# Build
-go build -o dploy ./cmd/api
-
-# Run locally
-export JWKS_URL=https://your-oidc.com/keys
-export JWT_ISSUER=https://your-oidc.com
-go run ./cmd/api/main.go
-
-# Docker
-docker build -t dploy:latest .
+make build              # build the frontend + Go API binary
+make build-operator     # build the operator binary
+make manifests generate # regenerate CRDs + deepcopy from kubebuilder markers
+make install            # apply the CRDs to the current kube context
+make test               # run tests
+make docker-build docker-build-operator   # build both images
 ```
+
+Run `make help` for the full target list.
 
 ## Documentation
 
-Full documentation available at: **https://aydev-fr.github.io/dploy**
+Full documentation: **https://dploy.dev**
 
-- [Installation](https://aydev-fr.github.io/dploy/docs/installation) - Helm, ArgoCD, manual setup
-- [Configuration](https://aydev-fr.github.io/dploy/docs/configuration) - Environment variables
-- [Environments](https://aydev-fr.github.io/dploy/docs/environments) - Define available environments
-- [API Reference](https://aydev-fr.github.io/dploy/docs/api/overview) - REST API documentation
-- [Architecture](https://aydev-fr.github.io/dploy/docs/architecture) - System design
+- [Quick Start](https://dploy.dev/quick-start/) — local Kind walkthrough
+- [Installation](https://dploy.dev/installation/) — Helm install and values reference
+- [Configuration](https://dploy.dev/configuration/) — environment variables and the `OperatorConfig`
+- [Architecture](https://dploy.dev/concepts/architecture/) — operator/API split, RBAC boundary, lifecycle
+- [Templates & Instances](https://dploy.dev/concepts/templates/) — define your catalog
+- [API Reference](https://dploy.dev/api/overview/) — REST API
+- Deployment: [OIDC Providers](https://dploy.dev/deployment/oidc-providers/) · [TLS Certificates](https://dploy.dev/deployment/tls-certificates/) · [ExternalDNS](https://dploy.dev/deployment/external-dns/) · [Security Considerations](https://dploy.dev/deployment/security-considerations/)
 
 ## License
 

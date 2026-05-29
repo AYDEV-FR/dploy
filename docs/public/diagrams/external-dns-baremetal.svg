@@ -1,0 +1,116 @@
+<svg content="&lt;mxfile host=&quot;app.diagrams.net&quot; type=&quot;device&quot;&gt;
+  &lt;diagram name=&quot;ExternalDNS bare metal&quot; id=&quot;dploy-externaldns&quot;&gt;
+    &lt;mxGraphModel dx=&quot;960&quot; dy=&quot;500&quot; grid=&quot;1&quot; gridSize=&quot;10&quot; guides=&quot;1&quot; tooltips=&quot;1&quot; connect=&quot;1&quot; arrows=&quot;1&quot; fold=&quot;1&quot; page=&quot;1&quot; pageScale=&quot;1&quot; pageWidth=&quot;960&quot; pageHeight=&quot;500&quot; math=&quot;0&quot; shadow=&quot;0&quot;&gt;
+      &lt;root&gt;
+        &lt;mxCell id=&quot;0&quot; /&gt;
+        &lt;mxCell id=&quot;1&quot; parent=&quot;0&quot; /&gt;
+        &lt;mxCell id=&quot;cluster&quot; value=&quot;Kubernetes cluster (bare metal)&quot; style=&quot;rounded=1;dashed=1;fillColor=none;strokeColor=#94a3b8;align=left;verticalAlign=top;spacingLeft=14;spacingTop=8;fontColor=#64748b;fontSize=12;fontStyle=1&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;40&quot; y=&quot;110&quot; width=&quot;880&quot; height=&quot;380&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;client&quot; value=&quot;Client / Browser&amp;#10;resolves + opens the URL&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;fontColor=#075985;fontSize=12&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;66&quot; y=&quot;30&quot; width=&quot;200&quot; height=&quot;64&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;httproute&quot; value=&quot;Ingress / HTTPRoute&amp;#10;john-a1b2c3d4.env.dploy.dev&amp;#10;per environment&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;fontColor=#166534;fontSize=12&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;66&quot; y=&quot;160&quot; width=&quot;190&quot; height=&quot;92&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;externaldns&quot; value=&quot;ExternalDNS&amp;#10;provider: coredns&amp;#10;reads Ingress LB IP&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;fontColor=#4c1d95;fontSize=12&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;300&quot; y=&quot;160&quot; width=&quot;180&quot; height=&quot;92&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;etcd&quot; value=&quot;etcd&amp;#10;record store&amp;#10;/skydns&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#ca8a04;fontColor=#854d0e;fontSize=12&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;524&quot; y=&quot;160&quot; width=&quot;150&quot; height=&quot;92&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;coredns&quot; value=&quot;CoreDNS&amp;#10;authoritative env.dploy.dev&amp;#10;etcd plugin&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#ccfbf1;strokeColor=#0d9488;fontColor=#115e59;fontSize=12&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;716&quot; y=&quot;160&quot; width=&quot;180&quot; height=&quot;92&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;metallb&quot; value=&quot;MetalLB&amp;#10;IPAddressPool&amp;#10;L2Advertisement (ARP)&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe4e6;strokeColor=#e11d48;fontColor=#9f1239;fontSize=12&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;300&quot; y=&quot;340&quot; width=&quot;180&quot; height=&quot;92&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;ingressctrl&quot; value=&quot;Ingress / Gateway ctrl&amp;#10;Service · type LoadBalancer&amp;#10;EXTERNAL-IP 192.168.1.240&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;fontColor=#1e3a8a;fontSize=12&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;524&quot; y=&quot;340&quot; width=&quot;190&quot; height=&quot;92&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e1&quot; value=&quot;watch&quot; style=&quot;endArrow=block;html=1;strokeColor=#334155;fontColor=#334155;fontSize=11&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;httproute&quot; target=&quot;externaldns&quot;&gt;&lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;&lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e2&quot; value=&quot;write A record&quot; style=&quot;endArrow=block;html=1;strokeColor=#334155;fontColor=#334155;fontSize=11&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;externaldns&quot; target=&quot;etcd&quot;&gt;&lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;&lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e3&quot; value=&quot;reads&quot; style=&quot;endArrow=block;html=1;strokeColor=#334155;fontColor=#334155;fontSize=11&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;etcd&quot; target=&quot;coredns&quot;&gt;&lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;&lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e4&quot; value=&quot;assigns IP + ARP&quot; style=&quot;endArrow=block;html=1;strokeColor=#334155;fontColor=#334155;fontSize=11&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;metallb&quot; target=&quot;ingressctrl&quot;&gt;&lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;&lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e5&quot; value=&quot;1. resolve host → 192.168.1.240&quot; style=&quot;endArrow=block;html=1;dashed=1;strokeColor=#64748b;fontColor=#64748b;fontSize=11&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;client&quot; target=&quot;coredns&quot;&gt;&lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;&lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e6&quot; value=&quot;2. HTTPS → 192.168.1.240 (MetalLB answers ARP)&quot; style=&quot;endArrow=block;html=1;dashed=1;strokeColor=#64748b;fontColor=#64748b;fontSize=11&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;client&quot; target=&quot;ingressctrl&quot;&gt;&lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;&lt;/mxCell&gt;
+      &lt;/root&gt;
+    &lt;/mxGraphModel&gt;
+  &lt;/diagram&gt;
+&lt;/mxfile&gt;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 500" width="960" height="500" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-label="ExternalDNS on bare metal. A per-environment Ingress or HTTPRoute is watched by ExternalDNS, which reads the LoadBalancer IP MetalLB assigned and writes an A record into etcd. CoreDNS reads etcd and is authoritative for env.dploy.dev. A client resolves the hostname to the MetalLB pool IP and sends HTTPS to the ingress controller Service, whose IP MetalLB advertises over L2 (ARP).">
+  <defs>
+    <marker id="ed-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+    <marker id="ed-arrowDash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <!-- Kubernetes cluster boundary -->
+  <rect x="40" y="110" width="880" height="380" rx="14" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="7 5"/>
+  <text x="58" y="134" fill="#64748b" font-size="13" font-weight="600">Kubernetes cluster (bare metal)</text>
+
+  <!-- Client / Browser (external) -->
+  <rect x="66" y="30" width="200" height="64" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+  <text x="166" y="58" text-anchor="middle" fill="#075985" font-size="14" font-weight="700">Client / Browser</text>
+  <text x="166" y="78" text-anchor="middle" fill="#0369a1" font-size="11">resolves + opens the URL</text>
+
+  <!-- Ingress / HTTPRoute -->
+  <rect x="66" y="160" width="190" height="92" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="161" y="190" text-anchor="middle" fill="#166534" font-size="13.5" font-weight="700">Ingress / HTTPRoute</text>
+  <text x="161" y="210" text-anchor="middle" fill="#15803d" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">john-a1b2c3d4.env.dploy.dev</text>
+  <text x="161" y="230" text-anchor="middle" fill="#15803d" font-size="11" font-style="italic">per environment</text>
+
+  <!-- ExternalDNS -->
+  <rect x="300" y="160" width="180" height="92" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="390" y="190" text-anchor="middle" fill="#4c1d95" font-size="14" font-weight="700">ExternalDNS</text>
+  <text x="390" y="210" text-anchor="middle" fill="#6d28d9" font-size="11">provider: coredns</text>
+  <text x="390" y="230" text-anchor="middle" fill="#6d28d9" font-size="11">reads Ingress LB IP</text>
+
+  <!-- etcd -->
+  <rect x="524" y="160" width="150" height="92" rx="10" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
+  <text x="599" y="190" text-anchor="middle" fill="#854d0e" font-size="14" font-weight="700">etcd</text>
+  <text x="599" y="210" text-anchor="middle" fill="#a16207" font-size="11">record store</text>
+  <text x="599" y="230" text-anchor="middle" fill="#a16207" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">/skydns</text>
+
+  <!-- CoreDNS -->
+  <rect x="716" y="160" width="180" height="92" rx="10" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+  <text x="806" y="190" text-anchor="middle" fill="#115e59" font-size="14" font-weight="700">CoreDNS</text>
+  <text x="806" y="210" text-anchor="middle" fill="#0f766e" font-size="11">authoritative env.dploy.dev</text>
+  <text x="806" y="230" text-anchor="middle" fill="#0f766e" font-size="11">etcd plugin</text>
+
+  <!-- MetalLB -->
+  <rect x="300" y="340" width="180" height="92" rx="10" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.5"/>
+  <text x="390" y="370" text-anchor="middle" fill="#9f1239" font-size="14" font-weight="700">MetalLB</text>
+  <text x="390" y="390" text-anchor="middle" fill="#be123c" font-size="11">IPAddressPool</text>
+  <text x="390" y="410" text-anchor="middle" fill="#be123c" font-size="11">L2Advertisement (ARP)</text>
+
+  <!-- Ingress / Gateway controller Service -->
+  <rect x="524" y="340" width="190" height="92" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="619" y="368" text-anchor="middle" fill="#1e3a8a" font-size="13" font-weight="700">Ingress / Gateway ctrl</text>
+  <text x="619" y="387" text-anchor="middle" fill="#1d4ed8" font-size="11">Service · type LoadBalancer</text>
+  <text x="619" y="408" text-anchor="middle" fill="#1d4ed8" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">EXTERNAL-IP 192.168.1.240</text>
+
+  <!-- publish chain arrows -->
+  <path d="M256,206 L300,206" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#ed-arrow)"/>
+  <text x="278" y="150" text-anchor="middle" fill="#334155" font-size="11">watch</text>
+
+  <path d="M480,206 L524,206" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#ed-arrow)"/>
+  <text x="502" y="150" text-anchor="middle" fill="#334155" font-size="11">write A record</text>
+
+  <path d="M674,206 L716,206" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#ed-arrow)"/>
+  <text x="695" y="150" text-anchor="middle" fill="#334155" font-size="11">reads</text>
+
+  <!-- MetalLB -> ingress controller Service -->
+  <path d="M480,386 L524,386" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#ed-arrow)"/>
+  <text x="502" y="330" text-anchor="middle" fill="#334155" font-size="11">assigns IP + ARP</text>
+
+  <!-- Client -> CoreDNS (resolve) -->
+  <path d="M266,60 C 520,38 700,66 804,158" fill="none" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ed-arrowDash)"/>
+  <text x="560" y="46" text-anchor="middle" fill="#64748b" font-size="11.5">1. resolve host &#8594; 192.168.1.240</text>
+
+  <!-- Client -> ingress controller Service (traffic) -->
+  <path d="M166,94 L52,94 L52,458 L619,458 L619,434" fill="none" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ed-arrowDash)"/>
+  <text x="360" y="450" text-anchor="middle" fill="#64748b" font-size="11.5">2. HTTPS &#8594; 192.168.1.240 (MetalLB answers ARP)</text>
+</svg>

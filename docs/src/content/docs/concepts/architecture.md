@@ -11,8 +11,6 @@ from touching the deployment engine directly.
 
 ![Dploy architecture: the browser talks to the Dploy API, which writes DployTemplate and DployInstance custom resources; the operator reconciles them into Flux GitRepository/HelmRepository and HelmRelease resources that install the environment into a per-instance workload namespace.](/diagrams/dploy-architecture.svg)
 
-<p><a href="/diagrams/dploy-architecture.drawio">Editable source (draw.io)</a></p>
-
 ## Components
 
 ### Dploy API
