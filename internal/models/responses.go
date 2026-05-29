@@ -28,6 +28,9 @@ type UserEnvironmentResponse struct {
 
 	Owner  string `json:"owner,omitempty"`  // Resolved owner key (username, group, …)
 	Shared bool   `json:"shared,omitempty"` // True when owned by someone other than the requester (team-shared)
+
+	ConnectionType    string `json:"connectionType,omitempty"`    // "web" (default) or "instructions"
+	ConnectionMessage string `json:"connectionMessage,omitempty"` // Copyable command when type is "instructions"
 }
 
 type UserEnvironmentsListResponse struct {
@@ -43,6 +46,9 @@ type RunEnvironmentResponse struct {
 	ExpiresAt string `json:"expiresAt"`
 	Owner     string `json:"owner,omitempty"`
 	Shared    bool   `json:"shared,omitempty"`
+
+	ConnectionType    string `json:"connectionType,omitempty"`
+	ConnectionMessage string `json:"connectionMessage,omitempty"`
 }
 
 type StatusResponse struct {
@@ -52,6 +58,9 @@ type StatusResponse struct {
 	ExpiresAt string `json:"expiresAt"`
 	Owner     string `json:"owner,omitempty"`
 	Shared    bool   `json:"shared,omitempty"`
+
+	ConnectionType    string `json:"connectionType,omitempty"`
+	ConnectionMessage string `json:"connectionMessage,omitempty"`
 }
 
 type ExtendResponse struct {

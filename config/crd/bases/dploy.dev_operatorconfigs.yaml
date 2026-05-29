@@ -73,12 +73,30 @@ spec:
                 description: BaseDomain is used to build per-instance ingress hostnames
                   (<uuid>.<baseDomain>).
                 type: string
+              connectionMessageTemplate:
+                description: |-
+                  ConnectionMessageTemplate is the cluster-wide default instructions template; a
+                  DployTemplate may override it. Rendered like connectionURLTemplate plus
+                  .URL / .ConnectionURL (the resolved connection target).
+                type: string
               connectionURLTemplate:
                 description: |-
                   ConnectionURLTemplate is the cluster-wide default Go (text/template) for an
                   instance's public URL. A DployTemplate may override it. Rendered with .Owner,
                   .UUID, .BaseDomain, .Template, .Params and .Claims. When empty the operator
                   falls back to "<uuid>.<baseDomain>".
+                type: string
+              defaultConnectionType:
+                allOf:
+                - enum:
+                  - web
+                  - instructions
+                - enum:
+                  - web
+                  - instructions
+                description: |-
+                  DefaultConnectionType is the cluster-wide default presentation ("web" or
+                  "instructions") for templates that do not set connectionType. Defaults to "web".
                 type: string
               defaultEngine:
                 default: flux

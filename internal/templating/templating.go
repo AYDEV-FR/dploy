@@ -35,6 +35,8 @@ type Data struct {
 	IngressHost string
 	// URL is the resolved public URL (set after the connection-URL template renders).
 	URL string
+	// ConnectionURL is an alias of URL, available to the connection-message template.
+	ConnectionURL string
 	// Namespace is the workload namespace the instance deploys into.
 	Namespace string
 	// Template is the DployTemplate this instance derives from.

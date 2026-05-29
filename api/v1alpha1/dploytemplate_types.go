@@ -44,6 +44,7 @@ type TemplateParameter struct {
 // DployTemplateSpec defines a deployable catalog entry.
 // +kubebuilder:validation:XValidation:rule="!has(self.method) || self.method != 'pool' || !has(self.parameters) || size(self.parameters) == 0",message="pool templates cannot declare parameters: pool instances are anonymous"
 // +kubebuilder:validation:XValidation:rule="!has(self.method) || self.method != 'pool' || !has(self.valuesTemplate) || (!self.valuesTemplate.contains('.Claims') && !self.valuesTemplate.contains('.Params') && !self.valuesTemplate.contains('.Owner'))",message="pool templates must be anonymous: valuesTemplate cannot reference .Claims, .Params or .Owner"
+// +kubebuilder:validation:XValidation:rule="!has(self.method) || self.method != 'pool' || !has(self.connectionMessageTemplate) || (!self.connectionMessageTemplate.contains('.Claims') && !self.connectionMessageTemplate.contains('.Params') && !self.connectionMessageTemplate.contains('.Owner'))",message="pool templates must be anonymous: connectionMessageTemplate cannot reference .Claims, .Params or .Owner"
 type DployTemplateSpec struct {
 	// DisplayName is the human-friendly name shown in the UI.
 	// +optional
@@ -106,6 +107,22 @@ type DployTemplateSpec struct {
 	// .Template, .Params and .Claims.
 	// +optional
 	ConnectionURLTemplate string `json:"connectionURLTemplate,omitempty"`
+
+	// ConnectionType selects how an instance's connection is presented: "web" (a
+	// browser URL the UI links and redirects to) or "instructions" (a copyable
+	// command such as "ssh root@host -p 22000" that the UI shows without
+	// redirecting). Empty falls back to OperatorConfig.defaultConnectionType, then "web".
+	// +kubebuilder:validation:Enum=web;instructions
+	// +optional
+	ConnectionType ConnectionType `json:"connectionType,omitempty"`
+
+	// ConnectionMessageTemplate renders the instructions shown when connectionType
+	// is "instructions". Go (text/template) with the same context as
+	// connectionURLTemplate plus .URL / .ConnectionURL (the resolved connection
+	// target). Examples: "ssh root@{{ .ConnectionURL }}" or "nc {{ .ConnectionURL }} 22000".
+	// When empty in instructions mode the resolved URL is shown verbatim.
+	// +optional
+	ConnectionMessageTemplate string `json:"connectionMessageTemplate,omitempty"`
 
 	// TTL configures instance lifetime; falls back to OperatorConfig defaults when unset.
 	// +optional
