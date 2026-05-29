@@ -10,6 +10,15 @@
 # ---------------------------------------------------------------------------
 replicaCount: 1
 
+# Rollout strategy. The default avoids a surge pod (maxSurge: 0) so upgrades
+# succeed on capacity-constrained (e.g. single-node) clusters: the old pod is
+# terminated first, then the new one is scheduled into the freed slot.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: 1
+
 image:
   repository: ghcr.io/aydev-fr/dploy
   pullPolicy: IfNotPresent
@@ -93,6 +102,13 @@ operator:
   replicaCount: 1
   # Enable leader election to run more than one replica safely.
   leaderElection: false
+
+  # See the API strategy note above: no surge pod, so the rollout fits a full node.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
 
   image:
     repository: ghcr.io/aydev-fr/dploy-operator
