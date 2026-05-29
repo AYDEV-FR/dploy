@@ -31,7 +31,7 @@ spec:
       type: string
     - jsonPath: .status.expiresAt
       name: Expires
-      type: date
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -159,6 +159,19 @@ spec:
                   - type
                   type: object
                 type: array
+              connectionMessage:
+                description: |-
+                  ConnectionMessage is the rendered connection instructions when
+                  connectionType is "instructions", e.g. "ssh root@pool-abc.dploy.dev -p 22000".
+                type: string
+              connectionType:
+                description: |-
+                  ConnectionType describes how URL/ConnectionMessage should be presented
+                  (web | instructions).
+                enum:
+                - web
+                - instructions
+                type: string
               engine:
                 description: Engine is the engine that materialized this instance.
                 enum:
@@ -206,7 +219,9 @@ spec:
                   OutOfSync).
                 type: string
               url:
-                description: URL is the public ingress URL of the instance.
+                description: |-
+                  URL is the resolved connection target: the public ingress URL for "web"
+                  connections, or the bare host/endpoint referenced by the instructions.
                 type: string
               uuid:
                 description: UUID is the short unique identifier assigned by the operator.

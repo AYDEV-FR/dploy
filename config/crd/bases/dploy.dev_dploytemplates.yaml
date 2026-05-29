@@ -93,6 +93,28 @@ spec:
                 required:
                 - repoURL
                 type: object
+              connectionMessageTemplate:
+                description: |-
+                  ConnectionMessageTemplate renders the instructions shown when connectionType
+                  is "instructions". Go (text/template) with the same context as
+                  connectionURLTemplate plus .URL / .ConnectionURL (the resolved connection
+                  target). Examples: "ssh root@{{ .ConnectionURL }}" or "nc {{ .ConnectionURL }} 22000".
+                  When empty in instructions mode the resolved URL is shown verbatim.
+                type: string
+              connectionType:
+                allOf:
+                - enum:
+                  - web
+                  - instructions
+                - enum:
+                  - web
+                  - instructions
+                description: |-
+                  ConnectionType selects how an instance's connection is presented: "web" (a
+                  browser URL the UI links and redirects to) or "instructions" (a copyable
+                  command such as "ssh root@host -p 22000" that the UI shows without
+                  redirecting). Empty falls back to OperatorConfig.defaultConnectionType, then "web".
+                type: string
               connectionURLTemplate:
                 description: |-
                   ConnectionURLTemplate overrides OperatorConfig.connectionURLTemplate for this
@@ -236,6 +258,11 @@ spec:
               rule: '!has(self.method) || self.method != ''pool'' || !has(self.valuesTemplate)
                 || (!self.valuesTemplate.contains(''.Claims'') && !self.valuesTemplate.contains(''.Params'')
                 && !self.valuesTemplate.contains(''.Owner''))'
+            - message: 'pool templates must be anonymous: connectionMessageTemplate
+                cannot reference .Claims, .Params or .Owner'
+              rule: '!has(self.method) || self.method != ''pool'' || !has(self.connectionMessageTemplate)
+                || (!self.connectionMessageTemplate.contains(''.Claims'') && !self.connectionMessageTemplate.contains(''.Params'')
+                && !self.connectionMessageTemplate.contains(''.Owner''))'
           status:
             description: DployTemplateStatus reports pool occupancy and readiness.
             properties:

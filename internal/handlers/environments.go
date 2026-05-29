@@ -120,6 +120,9 @@ func (h *EnvironmentsHandler) ListUserEnvironments(c *fiber.Ctx) error {
 			IsUnlimited: inst.Spec.TTLSeconds == -1,
 			Owner:       inst.Spec.Owner,
 			Shared:      inst.Spec.Owner != "" && inst.Spec.Owner != selfOwner,
+
+			ConnectionType:    string(inst.Status.ConnectionType),
+			ConnectionMessage: inst.Status.ConnectionMessage,
 		})
 	}
 

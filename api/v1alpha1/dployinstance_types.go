@@ -73,9 +73,20 @@ type DployInstanceStatus struct {
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 
-	// URL is the public ingress URL of the instance.
+	// URL is the resolved connection target: the public ingress URL for "web"
+	// connections, or the bare host/endpoint referenced by the instructions.
 	// +optional
 	URL string `json:"url,omitempty"`
+
+	// ConnectionType describes how URL/ConnectionMessage should be presented
+	// (web | instructions).
+	// +optional
+	ConnectionType ConnectionType `json:"connectionType,omitempty"`
+
+	// ConnectionMessage is the rendered connection instructions when
+	// connectionType is "instructions", e.g. "ssh root@pool-abc.dploy.dev -p 22000".
+	// +optional
+	ConnectionMessage string `json:"connectionMessage,omitempty"`
 
 	// Engine is the engine that materialized this instance.
 	// +optional
@@ -119,7 +130,10 @@ type DployInstanceStatus struct {
 // +kubebuilder:printcolumn:name="Owner",type=string,JSONPath=`.spec.owner`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="URL",type=string,JSONPath=`.status.url`
-// +kubebuilder:printcolumn:name="Expires",type=date,JSONPath=`.status.expiresAt`
+// Expires is a string column, not date: kubectl renders a date column as
+// time-since (an age), which is negative for a future expiry and prints as
+// "<invalid>". A string shows the absolute RFC3339 expiry instead.
+// +kubebuilder:printcolumn:name="Expires",type=string,JSONPath=`.status.expiresAt`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // DployInstance is a single deployed (or pooled) environment derived from a DployTemplate.
