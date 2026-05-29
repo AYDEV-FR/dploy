@@ -42,6 +42,8 @@ type TemplateParameter struct {
 }
 
 // DployTemplateSpec defines a deployable catalog entry.
+// +kubebuilder:validation:XValidation:rule="!has(self.method) || self.method != 'pool' || !has(self.parameters) || size(self.parameters) == 0",message="pool templates cannot declare parameters: pool instances are anonymous"
+// +kubebuilder:validation:XValidation:rule="!has(self.method) || self.method != 'pool' || !has(self.valuesTemplate) || (!self.valuesTemplate.contains('.Claims') && !self.valuesTemplate.contains('.Params') && !self.valuesTemplate.contains('.Owner'))",message="pool templates must be anonymous: valuesTemplate cannot reference .Claims, .Params or .Owner"
 type DployTemplateSpec struct {
 	// DisplayName is the human-friendly name shown in the UI.
 	// +optional
