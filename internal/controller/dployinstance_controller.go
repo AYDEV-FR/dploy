@@ -261,18 +261,31 @@ func (r *DployInstanceReconciler) ensureMeta(inst *dployv1alpha1.DployInstance) 
 }
 
 func (r *DployInstanceReconciler) buildData(inst *dployv1alpha1.DployInstance, tmpl *dployv1alpha1.DployTemplate, eff operatorconfig.Effective, targetNS string) (*templating.Data, error) {
+	owner := inst.Spec.Owner
 	claims, err := templating.ClaimsMap(inst.Spec.Claims)
 	if err != nil {
 		return nil, err
 	}
+	params := inst.Spec.Params
+
+	// Pool instances are anonymous: owner, claims and params are never exposed to
+	// the templates, so a warm instance is identical for everyone and claiming it
+	// does not reconfigure the workload (the catalog enforces that pool templates
+	// don't reference .Owner/.Claims/.Params and declare no parameters).
+	if inst.Spec.Pooled {
+		owner = ""
+		claims = map[string]any{}
+		params = nil
+	}
+
 	return &templating.Data{
-		Owner:       sanitize(inst.Spec.Owner),
+		Owner:       sanitize(owner),
 		UUID:        inst.Status.UUID,
 		BaseDomain:  eff.BaseDomain,
-		IngressHost: ingressHost(inst.Spec.Owner, inst.Status.UUID, eff.BaseDomain),
+		IngressHost: ingressHost(owner, inst.Status.UUID, eff.BaseDomain),
 		Namespace:   targetNS,
 		Template:    tmpl,
-		Params:      inst.Spec.Params,
+		Params:      params,
 		Claims:      claims,
 		Config:      templating.Config{Values: eff.Values},
 	}, nil

@@ -226,6 +226,16 @@ spec:
             - chart
             - enabled
             type: object
+            x-kubernetes-validations:
+            - message: 'pool templates cannot declare parameters: pool instances are
+                anonymous'
+              rule: '!has(self.method) || self.method != ''pool'' || !has(self.parameters)
+                || size(self.parameters) == 0'
+            - message: 'pool templates must be anonymous: valuesTemplate cannot reference
+                .Claims, .Params or .Owner'
+              rule: '!has(self.method) || self.method != ''pool'' || !has(self.valuesTemplate)
+                || (!self.valuesTemplate.contains(''.Claims'') && !self.valuesTemplate.contains(''.Params'')
+                && !self.valuesTemplate.contains(''.Owner''))'
           status:
             description: DployTemplateStatus reports pool occupancy and readiness.
             properties:
