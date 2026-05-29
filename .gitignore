@@ -34,6 +34,7 @@ Thumbs.db
 # Frontend
 web/node_modules/
 web/dist/
+web/.astro/
 
 # Backup
 web-backup/
