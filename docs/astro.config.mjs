@@ -54,6 +54,8 @@ export default defineConfig({
           items: [
             { label: 'OIDC Providers', link: '/deployment/oidc-providers/' },
             { label: 'TLS Certificates', link: '/deployment/tls-certificates/' },
+            { label: 'ExternalDNS (bare metal)', link: '/deployment/external-dns/' },
+            { label: 'Security Considerations', link: '/deployment/security-considerations/' },
           ],
         },
         {

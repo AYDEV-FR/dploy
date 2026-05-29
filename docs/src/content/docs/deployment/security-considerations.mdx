@@ -1,0 +1,338 @@
+---
+title: Security Considerations
+description: Isolating user-driven environments with Kata Containers (per-pod microVMs), and how to enforce it on Dploy's managed namespaces.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Dploy runs **user-selected workloads** — whatever chart a `DployTemplate` points at — inside
+short-lived, per-tenant namespaces. That makes the runtime boundary a first-class security
+concern: a malicious or vulnerable environment shouldn't be able to reach the node or another
+user's environment.
+
+## Two boundaries, two mechanisms
+
+Dploy already hardens the **control plane**: the API and operator are split across two service
+accounts so a compromised API can only create instance requests, never arbitrary workloads
+(see [Architecture → The RBAC boundary](/concepts/architecture/#the-rbac-boundary)).
+
+What that split does *not* cover is the **workload** itself. Environments run as ordinary
+containers, which **share the host kernel**. A container escape (kernel exploit, misconfigured
+capability, runtime CVE) lands an attacker on the node — and from there, on every other tenant's
+environment. For multi-tenant or untrusted workloads, that shared kernel is the weak point.
+
+**Kata Containers** closes it by running each pod inside a lightweight VM with its own guest
+kernel, so the isolation boundary is the hypervisor rather than namespaces + cgroups.
+
+| Threat | Standard runtime (runc) | Kata Containers |
+|--------|-------------------------|-----------------|
+| Container → host kernel escape | Shared kernel — high blast radius | Guest kernel only; host kernel not exposed |
+| Cross-tenant access after escape | Reachable | Confined to the pod's VM |
+| Kernel CVE exploitation | Hits the host | Hits a throwaway guest |
+| Hypervisor / hardware side-channels | n/a | Still possible — not a silver bullet |
+
+:::caution
+Kata raises the bar but is not absolute: VM-escape and hardware side-channel classes still exist.
+Treat it as one layer — see [Defense in depth](#defense-in-depth).
+:::
+
+## Prerequisites
+
+- **Hardware virtualization** on the worker nodes (`/dev/kvm`). On **bare metal** this is native;
+  on cloud instances you must enable **nested virtualization** (e.g. GCP `enable-nested-virtualization`,
+  Azure/AWS `*.metal` instances).
+- A CRI that Kata integrates with — **containerd** or **CRI-O**. `kata-deploy` configures
+  containerd automatically.
+- Verify KVM is present on a node:
+
+  ```bash
+  kubectl debug node/<node> -it --image=busybox -- ls -l /dev/kvm
+  ```
+
+## Install Kata Containers (kata-deploy)
+
+`kata-deploy` is a DaemonSet that drops the Kata binaries onto each node, wires up the container
+runtime, and registers the `RuntimeClass` objects.
+
+```bash
+# RBAC for the installer
+kubectl apply -f https://raw.githubusercontent.com/kata-containers/kata-containers/main/tools/packaging/kata-deploy/kata-rbac/base/kata-rbac.yaml
+
+# The installer DaemonSet (stable variant)
+kubectl apply -f https://raw.githubusercontent.com/kata-containers/kata-containers/main/tools/packaging/kata-deploy/kata-deploy/base/kata-deploy-stable.yaml
+
+# Wait for every node to finish installing
+kubectl -n kube-system rollout status ds/kata-deploy
+kubectl -n kube-system wait --timeout=10m --for=condition=Ready -l name=kata-deploy pod
+
+# Register the RuntimeClasses (kata, kata-qemu, kata-clh, …)
+kubectl apply -f https://raw.githubusercontent.com/kata-containers/kata-containers/main/tools/packaging/kata-deploy/runtimeclasses/kata-runtimeClasses.yaml
+```
+
+:::note
+Pin these manifests to a release tag instead of `main` for reproducible installs (e.g. swap
+`/main/` for `/3.x.y/`). `kata-deploy` is also published as a Helm chart if you prefer that path.
+:::
+
+Confirm the RuntimeClasses and boot a test pod with its own kernel:
+
+```bash
+kubectl get runtimeclass            # expect kata-qemu, kata-clh, …
+
+kubectl run kata-test --image=busybox --restart=Never \
+  --overrides='{"spec":{"runtimeClassName":"kata-qemu"}}' -- uname -r
+kubectl logs kata-test              # guest kernel, different from `uname -r` on the node
+kubectl delete pod kata-test
+```
+
+## Apply it to Dploy environments
+
+The goal is for **every environment pod** to run under the Kata `RuntimeClass`. You have two
+options; the enforcement approach is recommended because it doesn't depend on each chart exposing
+a `runtimeClassName` value.
+
+<Tabs>
+<TabItem label="Enforce on managed namespaces (recommended)">
+
+Dploy labels every workload namespace `dploy.dev/managed=true`. A policy engine can mutate **all**
+pods in those namespaces to use Kata, regardless of the chart. With
+[Kyverno](https://kyverno.io/):
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: dploy-kata-runtime
+spec:
+  rules:
+    - name: set-kata-runtime
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchLabels:
+                  dploy.dev/managed: "true"
+      mutate:
+        patchStrategicMerge:
+          spec:
+            runtimeClassName: kata-qemu
+```
+
+This is robust: it covers any template, and the boundary is enforced centrally rather than trusted
+to each chart's values.
+
+</TabItem>
+<TabItem label="Per template (chart must support it)">
+
+If the chart referenced by a `DployTemplate` exposes a `runtimeClassName` value, set it in the
+template's `valuesTemplate`:
+
+```yaml
+apiVersion: dploy.dev/v1alpha1
+kind: DployTemplate
+metadata:
+  name: webterm
+  namespace: dploy-system
+spec:
+  # …
+  valuesTemplate: |
+    runtimeClassName: kata-qemu
+    # … rest of the chart values
+```
+
+Simple, but only works for charts that thread `runtimeClassName` into their pod spec — and it must
+be repeated per template. Prefer the enforcement approach for untrusted workloads.
+
+</TabItem>
+</Tabs>
+
+Verify a real environment is sandboxed:
+
+```bash
+NS=$(kubectl get dployinstance <name> -n dploy-system -o jsonpath='{.status.namespace}')
+kubectl get pod -n "$NS" -o jsonpath='{.items[*].spec.runtimeClassName}'   # kata-qemu
+```
+
+## Operational trade-offs
+
+- **Overhead** — each pod is a microVM: higher memory/CPU baseline and slower cold start than
+  runc. Size templates accordingly and watch warm-pool sizing for pool-method templates.
+- **Startup latency** — VM boot adds seconds; relevant for on-demand environments where users wait
+  on provisioning.
+- **Feature limits** — host-path mounts, some device passthrough, and certain GPU setups need extra
+  configuration or aren't supported. Validate your heaviest template under Kata before rollout.
+
+## Defense in depth, by layer
+
+Kata isolates the runtime; the layers below bound what an environment can **consume, reach, and
+persist**. They all target the per-environment namespace, which Dploy labels
+`dploy.dev/managed=true` — so propagate them automatically (see [Auto-applying to managed
+namespaces](#auto-applying-to-managed-namespaces)) rather than hand-applying per namespace.
+
+![Defense in depth as concentric layers around a Dploy environment pod: outermost Admission (Pod Security Admission restricted plus Kyverno), then Network (default-deny NetworkPolicy), Compute (ResourceQuota and LimitRange), Storage (no hostPath, ephemeral limits, scoped StorageClass), Runtime (Kata Containers per-pod microVM), and at the center the environment Pod running a user-selected chart with runtimeClassName kata-qemu.](/diagrams/security-layers.svg)
+
+| Layer | Mechanism | Bounds |
+|-------|-----------|--------|
+| Runtime | Kata `RuntimeClass` | Kernel-level escape |
+| Compute | `ResourceQuota` + `LimitRange` | CPU/memory/pod/storage exhaustion |
+| Network | `NetworkPolicy` (default-deny) | Lateral movement, metadata/control-plane access |
+| Storage | PSA + ephemeral limits + scoped `StorageClass` | hostPath escape, disk-fill, data bleed |
+| Admission | Pod Security Admission `restricted` + Kyverno | Privileged pods, host namespaces, drift |
+
+### Runtime & compute
+
+Kata (above) is the runtime boundary. Pair it with a `ResourceQuota` and `LimitRange` so a single
+environment can't exhaust the node — doubly important under Kata, where each pod carries microVM
+overhead.
+
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: env-quota
+spec:
+  hard:
+    requests.cpu: "2"
+    requests.memory: 4Gi
+    limits.cpu: "4"
+    limits.memory: 8Gi
+    pods: "10"
+    requests.ephemeral-storage: 4Gi
+    limits.ephemeral-storage: 8Gi
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: env-limits
+spec:
+  limits:
+    - type: Container
+      default: { cpu: 500m, memory: 512Mi, ephemeral-storage: 1Gi }
+      defaultRequest: { cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi }
+      max: { cpu: "2", memory: 4Gi }
+```
+
+### Network
+
+Default-deny ingress **and** egress, then allow only DNS and the ingress/gateway path. This stops a
+compromised environment from reaching other tenants, in-cluster services, or the cloud metadata
+endpoint.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-and-ingress
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik-system   # your ingress/gateway ns
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+```
+
+:::note
+`NetworkPolicy` is only enforced by a CNI that implements it (Cilium, Calico, …). Widen the egress
+rules to whatever a given template legitimately needs (e.g. outbound HTTPS).
+:::
+
+### Storage
+
+- **No `hostPath`** — blocked by Pod Security Admission `restricted` (below); it's the most common
+  path from a volume to the node filesystem.
+- **Ephemeral-storage limits** (in the `LimitRange` above) stop a disk-fill DoS on the node.
+- **Scoped `StorageClass`** with `reclaimPolicy: Delete` so an environment's PVs are cleaned up at
+  teardown and never re-bound by another tenant; enable **encryption-at-rest** at the storage
+  backend.
+- Under Kata, volumes are surfaced **inside the guest VM** — never share a `ReadWriteMany` volume
+  across environments, or you reintroduce a cross-tenant channel.
+
+### Admission
+
+Enforce Pod Security Admission `restricted` on managed namespaces — it blocks privileged
+containers, host namespaces (`hostNetwork`/`hostPID`/`hostIPC`), `hostPath`, and running as root:
+
+```yaml
+# labels to add on each managed namespace
+pod-security.kubernetes.io/enforce: restricted
+pod-security.kubernetes.io/enforce-version: latest
+```
+
+Use Kyverno for what PSA can't express — requiring the Kata `runtimeClassName` (above), mandating
+resource limits, or pinning image registries.
+
+### Auto-applying to managed namespaces
+
+`ResourceQuota`, `LimitRange`, and `NetworkPolicy` are namespaced, and Dploy creates namespaces on
+the fly. Generate them into every managed namespace with a Kyverno `generate` policy keyed on the
+`dploy.dev/managed=true` label — the same label the [TLS](/deployment/tls-certificates/) and
+[ExternalDNS](/deployment/external-dns/) flows rely on:
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: dploy-namespace-hardening
+spec:
+  rules:
+    # 1. label the namespace for restricted Pod Security
+    - name: enforce-restricted-psa
+      match:
+        any:
+          - resources:
+              kinds: [Namespace]
+              selector:
+                matchLabels:
+                  dploy.dev/managed: "true"
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            labels:
+              pod-security.kubernetes.io/enforce: restricted
+    # 2. drop a default-deny NetworkPolicy into it
+    - name: default-deny-netpol
+      match:
+        any:
+          - resources:
+              kinds: [Namespace]
+              selector:
+                matchLabels:
+                  dploy.dev/managed: "true"
+      generate:
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        name: default-deny
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            podSelector: {}
+            policyTypes: [Ingress, Egress]
+```
+
+Repeat the `generate` rule for the `ResourceQuota`/`LimitRange` and the allow-list `NetworkPolicy`.
+
+:::tip
+Also keep the wildcard TLS certificate **out** of tenant namespaces — terminate it centrally at the
+Gateway so the private key never lands in an environment ([TLS Certificates](/deployment/tls-certificates/)).
+:::

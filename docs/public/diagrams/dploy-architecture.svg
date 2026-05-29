@@ -1,4 +1,79 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-label="Dploy architecture. The browser talks to the Dploy API which writes DployTemplate and DployInstance custom resources. The operator watches those resources and creates Flux GitRepository, HelmRepository and HelmRelease resources, which install the environment into a per-instance workload namespace. The browser opens the environment URL directly.">
+<svg content="&lt;mxfile host=&quot;app.diagrams.net&quot; type=&quot;device&quot;&gt;
+  &lt;diagram name=&quot;Dploy architecture&quot; id=&quot;dploy-arch&quot;&gt;
+    &lt;mxGraphModel dx=&quot;960&quot; dy=&quot;600&quot; grid=&quot;1&quot; gridSize=&quot;10&quot; guides=&quot;1&quot; tooltips=&quot;1&quot; connect=&quot;1&quot; arrows=&quot;1&quot; fold=&quot;1&quot; page=&quot;1&quot; pageScale=&quot;1&quot; pageWidth=&quot;960&quot; pageHeight=&quot;600&quot; math=&quot;0&quot; shadow=&quot;0&quot;&gt;
+      &lt;root&gt;
+        &lt;mxCell id=&quot;0&quot; /&gt;
+        &lt;mxCell id=&quot;1&quot; parent=&quot;0&quot; /&gt;
+
+        &lt;mxCell id=&quot;cluster&quot; value=&quot;Kubernetes cluster&quot; style=&quot;rounded=1;dashed=1;fillColor=none;strokeColor=#94a3b8;align=left;verticalAlign=top;spacingLeft=12;spacingTop=8;fontColor=#64748b;fontSize=12;fontStyle=1&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;40&quot; y=&quot;132&quot; width=&quot;880&quot; height=&quot;440&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+
+        &lt;mxCell id=&quot;browser&quot; value=&quot;User / Browser&amp;#10;Web UI&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;fontColor=#075985;fontSize=13&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;70&quot; y=&quot;36&quot; width=&quot;170&quot; height=&quot;60&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;oidc&quot; value=&quot;OIDC Provider&amp;#10;Authentik · Keycloak · Dex&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#e2e8f0;strokeColor=#475569;fontColor=#1e293b;fontSize=13&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;560&quot; y=&quot;36&quot; width=&quot;180&quot; height=&quot;60&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+
+        &lt;mxCell id=&quot;api&quot; value=&quot;Dploy API&amp;#10;GoFiber + OIDC&amp;#10;(writes CRs only)&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;fontColor=#1e3a8a;fontSize=13&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;70&quot; y=&quot;210&quot; width=&quot;185&quot; height=&quot;86&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+
+        &lt;mxCell id=&quot;crgroup&quot; value=&quot;Custom Resources&quot; style=&quot;rounded=1;dashed=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#94a3b8;align=center;verticalAlign=top;spacingTop=4;fontColor=#475569;fontSize=12&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;300&quot; y=&quot;196&quot; width=&quot;215&quot; height=&quot;116&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;template&quot; value=&quot;DployTemplate&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#64748b;fontColor=#334155;fontSize=12&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;316&quot; y=&quot;228&quot; width=&quot;183&quot; height=&quot;34&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;instance&quot; value=&quot;DployInstance&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#64748b;fontColor=#334155;fontSize=12&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;316&quot; y=&quot;268&quot; width=&quot;183&quot; height=&quot;34&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+
+        &lt;mxCell id=&quot;operator&quot; value=&quot;Dploy Operator&amp;#10;DployInstance controller&amp;#10;DployTemplate (pool) controller&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#7c3aed;fontColor=#4c1d95;fontSize=13&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;565&quot; y=&quot;208&quot; width=&quot;190&quot; height=&quot;90&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+
+        &lt;mxCell id=&quot;flux&quot; value=&quot;Flux&amp;#10;GitRepository / HelmRepository&amp;#10;+ HelmRelease&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#ccfbf1;strokeColor=#0d9488;fontColor=#115e59;fontSize=13&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;565&quot; y=&quot;380&quot; width=&quot;190&quot; height=&quot;90&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+
+        &lt;mxCell id=&quot;workload&quot; value=&quot;Workload namespace&amp;#10;&amp;lt;owner&amp;gt;-&amp;lt;template&amp;gt;-&amp;lt;uuid&amp;gt;&amp;#10;Pod · Service · Ingress&quot; style=&quot;rounded=1;whiteSpace=wrap;html=1;fillColor=#ffedd5;strokeColor=#ea580c;fontColor=#7c2d12;fontSize=13&quot; vertex=&quot;1&quot; parent=&quot;1&quot;&gt;
+          &lt;mxGeometry x=&quot;300&quot; y=&quot;392&quot; width=&quot;215&quot; height=&quot;100&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+
+        &lt;mxCell id=&quot;e_br_api&quot; value=&quot;HTTPS + JWT&quot; style=&quot;endArrow=block;html=1;rounded=1;strokeColor=#334155;fontColor=#334155;fontSize=11&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;browser&quot; target=&quot;api&quot;&gt;
+          &lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e_br_oidc&quot; value=&quot;login&quot; style=&quot;endArrow=block;html=1;dashed=1;strokeColor=#64748b;fontColor=#64748b;fontSize=11&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;browser&quot; target=&quot;oidc&quot;&gt;
+          &lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e_api_oidc&quot; value=&quot;validate JWT (JWKS)&quot; style=&quot;endArrow=block;html=1;dashed=1;strokeColor=#64748b;fontColor=#64748b;fontSize=11&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;api&quot; target=&quot;oidc&quot;&gt;
+          &lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e_api_cr&quot; value=&quot;create / claim&quot; style=&quot;endArrow=block;html=1;rounded=1;strokeColor=#334155;fontColor=#334155;fontSize=11&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;api&quot; target=&quot;crgroup&quot;&gt;
+          &lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e_cr_op&quot; value=&quot;watch&quot; style=&quot;endArrow=block;html=1;rounded=1;strokeColor=#334155;fontColor=#334155;fontSize=11&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;crgroup&quot; target=&quot;operator&quot;&gt;
+          &lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e_op_cr&quot; value=&quot;status&quot; style=&quot;endArrow=block;html=1;dashed=1;strokeColor=#64748b;fontColor=#64748b;fontSize=11;exitX=0.5;exitY=1;entryX=0.5;entryY=1&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;operator&quot; target=&quot;crgroup&quot;&gt;
+          &lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e_op_flux&quot; value=&quot;creates&quot; style=&quot;endArrow=block;html=1;rounded=1;strokeColor=#334155;fontColor=#334155;fontSize=11&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;operator&quot; target=&quot;flux&quot;&gt;
+          &lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e_flux_wl&quot; value=&quot;installs&quot; style=&quot;endArrow=block;html=1;rounded=1;strokeColor=#334155;fontColor=#334155;fontSize=11&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;flux&quot; target=&quot;workload&quot;&gt;
+          &lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+        &lt;mxCell id=&quot;e_br_wl&quot; value=&quot;open environment URL&quot; style=&quot;endArrow=block;html=1;dashed=1;rounded=1;strokeColor=#64748b;fontColor=#64748b;fontSize=11;exitX=0;exitY=0.5;entryX=0;entryY=0.5&quot; edge=&quot;1&quot; parent=&quot;1&quot; source=&quot;browser&quot; target=&quot;workload&quot;&gt;
+          &lt;mxGeometry relative=&quot;1&quot; as=&quot;geometry&quot; /&gt;
+        &lt;/mxCell&gt;
+      &lt;/root&gt;
+    &lt;/mxGraphModel&gt;
+  &lt;/diagram&gt;
+&lt;/mxfile&gt;
+" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-label="Dploy architecture. The browser talks to the Dploy API which writes DployTemplate and DployInstance custom resources. The operator watches those resources and creates Flux GitRepository, HelmRepository and HelmRelease resources, which install the environment into a per-instance workload namespace. The browser opens the environment URL directly.">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
