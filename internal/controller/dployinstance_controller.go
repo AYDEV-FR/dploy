@@ -97,7 +97,14 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	targetNS := workloadNamespace(inst.Spec.Owner, inst.Spec.TemplateRef, inst.Status.UUID)
+	// Pin the workload namespace for the instance's lifetime. Recomputing it from
+	// spec.Owner would move (and redeploy) a pooled instance when it is claimed,
+	// orphaning the warm namespace; instead claiming re-renders the values and
+	// upgrades the HelmRelease in place, so JWT claims/params flow in on claim.
+	targetNS := inst.Status.Namespace
+	if targetNS == "" {
+		targetNS = workloadNamespace(inst.Spec.Owner, inst.Spec.TemplateRef, inst.Status.UUID)
+	}
 	inst.Status.Namespace = targetNS
 	inst.Status.Engine = dployv1alpha1.EngineFlux
 
