@@ -33,9 +33,11 @@ type Effective struct {
 	FluxNamespace         string
 	FluxServiceAccount    string
 	FluxInterval          time.Duration
-	BaseDomain            string
-	ConnectionURLTemplate string
-	TTLSeconds            int64
+	BaseDomain                string
+	ConnectionURLTemplate     string
+	DefaultConnectionType     dployv1alpha1.ConnectionType
+	ConnectionMessageTemplate string
+	TTLSeconds                int64
 	ExtendSeconds         int64
 	MaxExtends            int
 	MaxInstancesPerUser   int
@@ -84,6 +86,12 @@ func Resolve(ctx context.Context, c client.Client) (Effective, error) {
 	}
 	if spec.ConnectionURLTemplate != "" {
 		eff.ConnectionURLTemplate = spec.ConnectionURLTemplate
+	}
+	if spec.DefaultConnectionType != "" {
+		eff.DefaultConnectionType = spec.DefaultConnectionType
+	}
+	if spec.ConnectionMessageTemplate != "" {
+		eff.ConnectionMessageTemplate = spec.ConnectionMessageTemplate
 	}
 	if spec.Defaults.TTLSeconds != 0 {
 		eff.TTLSeconds = spec.Defaults.TTLSeconds

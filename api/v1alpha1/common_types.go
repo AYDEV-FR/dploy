@@ -11,6 +11,18 @@ const (
 	EngineFlux EngineType = "flux"
 )
 
+// ConnectionType selects how an instance's connection is presented to the user.
+// +kubebuilder:validation:Enum=web;instructions
+type ConnectionType string
+
+const (
+	// ConnectionWeb is a browser-reachable URL: the UI shows a link and redirects to it.
+	ConnectionWeb ConnectionType = "web"
+	// ConnectionInstructions is a copyable command or message (e.g. "ssh root@host -p 22000"):
+	// the UI displays it as text and never redirects.
+	ConnectionInstructions ConnectionType = "instructions"
+)
+
 // TemplateMethod controls how instances of a DployTemplate are provisioned.
 // +kubebuilder:validation:Enum=on-demand;pool
 type TemplateMethod string

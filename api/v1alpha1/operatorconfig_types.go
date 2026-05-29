@@ -92,6 +92,18 @@ type OperatorConfigSpec struct {
 	// +optional
 	ConnectionURLTemplate string `json:"connectionURLTemplate,omitempty"`
 
+	// DefaultConnectionType is the cluster-wide default presentation ("web" or
+	// "instructions") for templates that do not set connectionType. Defaults to "web".
+	// +kubebuilder:validation:Enum=web;instructions
+	// +optional
+	DefaultConnectionType ConnectionType `json:"defaultConnectionType,omitempty"`
+
+	// ConnectionMessageTemplate is the cluster-wide default instructions template; a
+	// DployTemplate may override it. Rendered like connectionURLTemplate plus
+	// .URL / .ConnectionURL (the resolved connection target).
+	// +optional
+	ConnectionMessageTemplate string `json:"connectionMessageTemplate,omitempty"`
+
 	// Defaults are applied to instances when their template omits the value.
 	// +optional
 	Defaults InstanceDefaults `json:"defaults,omitempty"`

@@ -138,12 +138,14 @@ func (h *RunHandler) GetStatus(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(models.StatusResponse{
-		UUID:      inst.Status.UUID,
-		Status:    instanceStatus(inst),
-		URL:       inst.Status.URL,
-		ExpiresAt: instanceExpiresAt(inst),
-		Owner:     inst.Spec.Owner,
-		Shared:    isShared(c, inst.Spec.Owner),
+		UUID:              inst.Status.UUID,
+		Status:            instanceStatus(inst),
+		URL:               inst.Status.URL,
+		ExpiresAt:         instanceExpiresAt(inst),
+		Owner:             inst.Spec.Owner,
+		Shared:            isShared(c, inst.Spec.Owner),
+		ConnectionType:    string(inst.Status.ConnectionType),
+		ConnectionMessage: inst.Status.ConnectionMessage,
 	})
 }
 
@@ -263,12 +265,14 @@ func claimsMap(c *fiber.Ctx) map[string]any {
 
 func respondInstance(c *fiber.Ctx, inst *dployv1alpha1.DployInstance) error {
 	return c.JSON(models.RunEnvironmentResponse{
-		UUID:      inst.Status.UUID,
-		Status:    instanceStatus(inst),
-		URL:       inst.Status.URL,
-		ExpiresAt: instanceExpiresAt(inst),
-		Owner:     inst.Spec.Owner,
-		Shared:    isShared(c, inst.Spec.Owner),
+		UUID:              inst.Status.UUID,
+		Status:            instanceStatus(inst),
+		URL:               inst.Status.URL,
+		ExpiresAt:         instanceExpiresAt(inst),
+		Owner:             inst.Spec.Owner,
+		Shared:            isShared(c, inst.Spec.Owner),
+		ConnectionType:    string(inst.Status.ConnectionType),
+		ConnectionMessage: inst.Status.ConnectionMessage,
 	})
 }
 

@@ -66,6 +66,14 @@ export async function renderEnvironments(): Promise<void> {
       .map((env) => {
         const status = String(env.status || 'Unknown');
         const extendable = !env.isUnlimited && env.maxExtends > 0 && env.extendCount < env.maxExtends;
+        const instructions = isInstructions(env);
+        const conn = connectionText(env);
+        const connBody = instructions
+          ? `<code class="env-cmd">${esc(conn)}</code>`
+          : `<a class="env-url" href="${esc(env.url)}" target="_blank" rel="noopener">${esc(env.url)}</a>`;
+        const connAction = instructions
+          ? `<button class="btn-icon" data-action="copy" data-copy="${esc(conn)}" title="Copy command">${SVG.copy}</button>`
+          : `<a class="btn-icon" href="${esc(env.url)}" target="_blank" rel="noopener" title="Open">${SVG.open}</a>`;
         return `
         <div class="env-item">
           <div class="env-emoji">${getIcon(env.icon)}</div>
@@ -75,7 +83,7 @@ export async function renderEnvironments(): Promise<void> {
               <span class="status ${esc(status.toLowerCase())}">${esc(status)}</span>
               ${env.shared ? `<span class="badge accent">owned by ${esc(env.owner)}</span>` : ''}
             </div>
-            <a class="env-url" href="${esc(env.url)}" target="_blank" rel="noopener">${esc(env.url)}</a>
+            ${connBody}
             <div class="env-meta">
               <span class="badge">${SVG.clock} ${esc(formatRemaining(env.expiresAt))}</span>
               ${env.isUnlimited ? '<span class="badge accent">∞ unlimited</span>' : ''}
@@ -83,7 +91,7 @@ export async function renderEnvironments(): Promise<void> {
             </div>
           </div>
           <div class="env-actions">
-            <a class="btn-icon" href="${esc(env.url)}" target="_blank" rel="noopener" title="Open">${SVG.open}</a>
+            ${connAction}
             <button class="btn-icon" data-action="extend" data-name="${esc(env.name)}" ${extendable ? '' : 'disabled'} title="Extend TTL">${SVG.clock}</button>
             <button class="btn-icon danger" data-action="delete" data-name="${esc(env.name)}" title="Delete">${SVG.trash}</button>
           </div>
@@ -227,16 +235,23 @@ const deployingHtml = (uuid?: string) => `
   <div class="status-text">Deploying…${uuid ? `<small>UUID: ${esc(uuid)}</small>` : ''}</div>
   <div class="progress"><div class="progress-fill"></div></div>`;
 
+// Connection instructions (e.g. "ssh root@host -p 22000") shown when the instance
+// is reachable by command rather than a browser URL — no redirect.
+const instructionsHtml = (msg: string) => `
+  <div class="status-text">✅ Instance ready! Connect with:</div>
+  <div class="conn-cmd">
+    <code>${esc(msg)}</code>
+    <button class="btn-icon" data-action="copy" data-copy="${esc(msg)}" title="Copy command">${SVG.copy}</button>
+  </div>`;
+
 export async function runFlow(name: string): Promise<void> {
   cancelRun();
   const nameEl = $('#run-env-name');
   if (nameEl) nameEl.textContent = name;
   runContent(deployingHtml());
 
-  let url: string | null = null;
   try {
     const res = await api.run(name);
-    url = res.url;
     runContent(deployingHtml(res.uuid));
   } catch (err) {
     runContent(`<div class="error-box">${esc((err as Error).message)}</div>
@@ -246,15 +261,19 @@ export async function runFlow(name: string): Promise<void> {
 
   const poll = async () => {
     try {
-      const { status } = await api.status(name);
-      const s = status.toLowerCase();
+      const res = await api.status(name);
+      const s = res.status.toLowerCase();
       if (s === 'healthy') {
         cancelRun();
-        runContent('<div class="status-text">✅ Instance ready! Redirecting…</div>');
-        if (url) setTimeout(() => (window.location.href = url!), 1200);
+        if (isInstructions(res)) {
+          runContent(instructionsHtml(connectionText(res)));
+        } else {
+          runContent('<div class="status-text">✅ Instance ready! Redirecting…</div>');
+          if (res.url) setTimeout(() => (window.location.href = res.url), 1200);
+        }
       } else if (s === 'degraded' || s === 'missing' || s === 'deleting') {
         cancelRun();
-        runContent(`<div class="error-box">Instance is ${esc(status)}. Check the Flux logs.</div>
+        runContent(`<div class="error-box">Instance is ${esc(res.status)}. Check the Flux logs.</div>
           <button class="btn btn-primary" onclick="location.reload()">Retry</button>`);
       }
     } catch {
@@ -270,7 +289,16 @@ export function wireEnvActions(): void {
   const list = $('#env-list');
   list?.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest('button[data-action]') as HTMLButtonElement | null;
-    if (!btn || btn.disabled) return;
+    if (!btn || btn.disabled || btn.dataset.action === 'copy') return;
     onEnvAction(btn.dataset.action!, btn.dataset.name!);
+  });
+
+  // Copy buttons may appear in the instances list and in the run view, so bind
+  // their handler once at the document level.
+  document.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest('button[data-action="copy"]') as HTMLButtonElement | null;
+    if (!btn) return;
+    e.preventDefault();
+    copyText(btn.dataset.copy ?? '');
   });
 }

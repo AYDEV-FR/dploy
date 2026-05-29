@@ -370,6 +370,20 @@ body[data-route='login'] .navbar {
 .env-url:hover {
   text-decoration: underline;
 }
+.env-cmd {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.2rem 0.45rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
 .env-meta {
   display: flex;
   gap: 0.5rem;
@@ -668,6 +682,25 @@ body[data-route='login'] .navbar {
   font-family: var(--mono);
   font-size: 0.8rem;
   opacity: 0.8;
+}
+.conn-cmd {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding: 0.6rem 0.85rem;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.conn-cmd code {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  color: var(--text);
+  text-align: left;
+  overflow-x: auto;
+  white-space: nowrap;
 }
 .progress {
   height: 4px;

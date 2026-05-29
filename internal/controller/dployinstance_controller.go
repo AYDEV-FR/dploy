@@ -124,6 +124,28 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 	inst.Status.URL = url
 	data.URL = url
+	data.ConnectionURL = url
+
+	// Resolve how the connection is presented: web (link/redirect) or instructions
+	// (a copyable command such as "ssh root@host -p 22000"). For instructions, render
+	// the message template if any; otherwise the resolved URL is shown verbatim.
+	connType := dployv1alpha1.ConnectionType(firstNonEmpty(string(tmpl.Spec.ConnectionType), string(eff.DefaultConnectionType)))
+	if connType == "" {
+		connType = dployv1alpha1.ConnectionWeb
+	}
+	inst.Status.ConnectionType = connType
+	inst.Status.ConnectionMessage = ""
+	if connType == dployv1alpha1.ConnectionInstructions {
+		msg := url
+		if msgTmpl := firstNonEmpty(tmpl.Spec.ConnectionMessageTemplate, eff.ConnectionMessageTemplate); msgTmpl != "" {
+			rendered, rerr := templating.Render("connectionMessage", msgTmpl, data)
+			if rerr != nil {
+				return r.fail(ctx, original, &inst, "ConnectionMessageTemplateError", rerr.Error())
+			}
+			msg = strings.TrimSpace(rendered)
+		}
+		inst.Status.ConnectionMessage = msg
+	}
 
 	// Render Helm values (YAML → JSON) when a values template is declared.
 	var valuesJSON []byte
