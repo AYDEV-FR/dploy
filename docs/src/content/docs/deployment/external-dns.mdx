@@ -1,0 +1,294 @@
+---
+title: ExternalDNS (bare metal)
+description: Automatic DNS for dynamic environments on bare-metal Kubernetes with ExternalDNS backed by etcd + CoreDNS, and MetalLB L2 advertisement.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Every Dploy environment is reachable at `<owner>-<uuid>.<baseDomain>` (the operator's
+`.IngressHost`, e.g. `john-a1b2c3d4.env.dploy.dev`). Those hostnames are created and destroyed
+on the fly, so a static DNS zone is impractical — each environment needs a record published the
+moment its Ingress/`HTTPRoute` appears and removed when the instance expires.
+
+On a managed cloud this is trivial (cloud DNS + cloud LoadBalancer). On **bare metal** you own
+both halves: there is no cloud load balancer to hand out an IP, and no cloud DNS API to publish
+records. This guide wires the self-hosted equivalent:
+
+- **MetalLB** (L2 advertisement) — gives your Ingress/Gateway controller a real LoadBalancer IP
+  on the LAN.
+- **ExternalDNS** — watches `Ingress`/`HTTPRoute`/`Service` objects and publishes the
+  corresponding records.
+- **etcd + CoreDNS** — the DNS backend ExternalDNS writes to (etcd) and the authoritative
+  resolver that serves the zone (CoreDNS via its `etcd` plugin).
+
+## How it fits together
+
+![ExternalDNS on bare metal: a per-environment Ingress/HTTPRoute is watched by ExternalDNS, which reads the LoadBalancer IP MetalLB assigned and writes an A record into etcd; CoreDNS reads etcd and is authoritative for env.dploy.dev; a client resolves the hostname to the MetalLB pool IP and sends HTTPS to the ingress controller Service, whose IP MetalLB advertises over L2 (ARP).](/diagrams/external-dns-baremetal.svg)
+
+The four components form a single chain, from environment creation to a resolvable hostname:
+
+1. The operator renders an **Ingress/`HTTPRoute`** for the instance with host
+   `john-a1b2c3d4.env.dploy.dev`.
+2. **ExternalDNS** watches those objects, reads the LoadBalancer IP that **MetalLB** assigned to
+   the ingress controller's `Service`, and writes a matching A record into **etcd**.
+3. **CoreDNS** is authoritative for `env.dploy.dev` and serves that record straight from etcd.
+4. A client resolves the host to the MetalLB pool IP; **MetalLB** answers ARP for it
+   (L2Advertisement), so traffic lands on the ingress controller.
+
+:::tip[Do you even need ExternalDNS?]
+Because Dploy uses a **wildcard** TLS certificate (`*.env.dploy.dev`, see
+[TLS Certificates](/deployment/tls-certificates/)), the simplest setup is a single static
+wildcard record `*.env.dploy.dev → <MetalLB IP>` and no ExternalDNS at all. Reach for the stack
+below when you want **per-host records** (cleaner observability, split-horizon DNS, or
+non-wildcard hostnames) published automatically as environments come and go.
+:::
+
+## Prerequisites
+
+- A bare-metal cluster with a free range of LAN IPs MetalLB can own.
+- An **Ingress** or **Gateway API** controller (see [TLS Certificates](/deployment/tls-certificates/)).
+- The parent zone (`dploy.dev`) able to **delegate** `env.dploy.dev` to your CoreDNS, or internal
+  resolvers you can point at it.
+
+## 1. MetalLB — LoadBalancer IPs via L2
+
+```bash
+helm repo add metallb https://metallb.github.io/metallb
+helm repo update
+helm install metallb metallb/metallb \
+  --namespace metallb-system --create-namespace
+kubectl -n metallb-system rollout status deploy/metallb-controller
+```
+
+Declare an address pool and advertise it.
+
+<Tabs>
+<TabItem label="L2 (ARP/NDP)">
+
+Best for a single L3 subnet — nodes answer ARP for the pool IPs, no router config needed.
+
+```yaml
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: dploy-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 192.168.1.240-192.168.1.250
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: dploy-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - dploy-pool
+```
+
+</TabItem>
+<TabItem label="BGP (alternative)">
+
+For multi-subnet / routed setups, peer MetalLB with your router instead of L2.
+
+```yaml
+apiVersion: metallb.io/v1beta1
+kind: BGPPeer
+metadata:
+  name: router
+  namespace: metallb-system
+spec:
+  myASN: 64512
+  peerASN: 64512
+  peerAddress: 192.168.1.1
+---
+apiVersion: metallb.io/v1beta1
+kind: BGPAdvertisement
+metadata:
+  name: dploy-bgp
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - dploy-pool
+```
+
+</TabItem>
+</Tabs>
+
+Your ingress controller's `Service` (type `LoadBalancer`) now gets an IP from `dploy-pool`. Note
+it — ExternalDNS will publish it for you:
+
+```bash
+kubectl get svc -A -o wide | grep LoadBalancer
+```
+
+## 2. etcd — record store for CoreDNS
+
+ExternalDNS's `coredns` provider doesn't talk to CoreDNS directly; it writes records into **etcd**,
+which CoreDNS reads through its `etcd` plugin. Deploy a small, dedicated etcd (not the cluster's
+control-plane etcd):
+
+```bash
+helm repo add bitnami https://charts.bitnami.com/bitnami
+helm repo update
+helm install etcd bitnami/etcd \
+  --namespace external-dns --create-namespace \
+  --set auth.rbac.create=false \
+  --set replicaCount=1
+```
+
+This exposes `etcd.external-dns.svc.cluster.local:2379`.
+
+:::caution
+`auth.rbac.create=false` disables etcd auth for brevity. For production enable client auth + TLS
+and pass the credentials to both CoreDNS and ExternalDNS (`ETCD_USERNAME`/`ETCD_PASSWORD`,
+`ETCD_CA_FILE`, …).
+:::
+
+## 3. CoreDNS — authoritative resolver for the zone
+
+Run a **second** CoreDNS (separate from `kube-system`'s cluster DNS) that is authoritative for
+`env.dploy.dev`, reads records from etcd, and is exposed on a MetalLB IP so external/upstream
+resolvers can reach it.
+
+```yaml
+# coredns-values.yaml
+serviceType: LoadBalancer
+servers:
+  - zones:
+      - zone: env.dploy.dev.
+    port: 53
+    plugins:
+      - name: errors
+      - name: health
+      - name: ready
+      - name: etcd
+        parameters: env.dploy.dev
+        configBlock: |-
+          path /skydns
+          endpoint http://etcd.external-dns.svc.cluster.local:2379
+      - name: cache
+        parameters: 30
+      - name: loadbalance
+  - zones:
+      - zone: .
+    port: 53
+    plugins:
+      - name: errors
+      - name: forward
+        parameters: . /etc/resolv.conf
+      - name: cache
+        parameters: 30
+```
+
+```bash
+helm repo add coredns https://coredns.github.io/helm
+helm repo update
+helm install dns-public coredns/coredns \
+  --namespace external-dns \
+  -f coredns-values.yaml
+kubectl -n external-dns get svc dns-public-coredns -o wide   # note the MetalLB IP
+```
+
+:::note
+The etcd `path /skydns` **must match** ExternalDNS's prefix (`COREDNS_PREFIX`, default
+`/skydns/`). Keep both at the default or change them together, or the records ExternalDNS writes
+won't be visible to CoreDNS.
+:::
+
+## 4. ExternalDNS — publish environment records
+
+Install ExternalDNS with the `coredns` provider, pointed at the same etcd, and scoped to the
+environment zone.
+
+<Tabs>
+<TabItem label="Ingress">
+
+```bash
+helm repo add external-dns https://kubernetes-sigs.github.io/external-dns/
+helm repo update
+helm install external-dns external-dns/external-dns \
+  --namespace external-dns \
+  --set provider=coredns \
+  --set 'env[0].name=ETCD_URLS' \
+  --set 'env[0].value=http://etcd.external-dns.svc.cluster.local:2379' \
+  --set 'sources={ingress,service}' \
+  --set 'domainFilters={env.dploy.dev}' \
+  --set policy=sync
+```
+
+</TabItem>
+<TabItem label="Gateway API">
+
+If environments expose an `HTTPRoute` instead of an `Ingress` (the recommended Dploy path), use
+the `gateway-httproute` source. The chart grants the needed `gateway.networking.k8s.io` read RBAC
+automatically.
+
+```bash
+helm install external-dns external-dns/external-dns \
+  --namespace external-dns \
+  --set provider=coredns \
+  --set 'env[0].name=ETCD_URLS' \
+  --set 'env[0].value=http://etcd.external-dns.svc.cluster.local:2379' \
+  --set 'sources={gateway-httproute}' \
+  --set 'domainFilters={env.dploy.dev}' \
+  --set policy=sync
+```
+
+</TabItem>
+</Tabs>
+
+`policy=sync` lets ExternalDNS **delete** records when an environment (and its Ingress/`HTTPRoute`)
+is torn down — which is exactly what you want for ephemeral environments. Use `upsert-only` if you
+prefer to never delete records automatically.
+
+## 5. Tie it back to Dploy
+
+Nothing extra is required on the Dploy side — the per-instance Ingress/`HTTPRoute` rendered from
+your template already carries `host: {{ .IngressHost }}`, which ExternalDNS keys off of. The end
+result:
+
+1. A user launches an environment → operator renders an Ingress/`HTTPRoute` with host
+   `john-a1b2c3d4.env.dploy.dev`.
+2. MetalLB has already assigned the ingress controller a LoadBalancer IP; ExternalDNS reads it
+   from the object's status.
+3. ExternalDNS writes the A record into etcd; CoreDNS serves `john-a1b2c3d4.env.dploy.dev`.
+4. The wildcard `*.env.dploy.dev` certificate covers TLS for the new host with no per-environment
+   issuance.
+
+### Delegate the zone
+
+Point real clients at CoreDNS by delegating `env.dploy.dev` from the parent zone to the CoreDNS
+MetalLB IP (or pointing internal resolvers at it):
+
+```dns
+; in the dploy.dev zone
+env.dploy.dev.    IN  NS    ns-dploy.dploy.dev.
+ns-dploy.dploy.dev. IN A    192.168.1.241        ; CoreDNS LoadBalancer IP
+```
+
+## Verification & troubleshooting
+
+```bash
+# ExternalDNS is reconciling and sees your hosts
+kubectl -n external-dns logs deploy/external-dns
+
+# Records actually landed in etcd
+kubectl -n external-dns exec -it statefulset/etcd -- \
+  etcdctl get --prefix /skydns
+
+# CoreDNS answers from the zone (use its MetalLB IP)
+dig @192.168.1.241 john-a1b2c3d4.env.dploy.dev +short
+
+# MetalLB assigned the ingress controller an IP
+kubectl get svc -A | grep LoadBalancer
+kubectl -n metallb-system logs -l app.kubernetes.io/component=speaker
+```
+
+| Symptom | Likely cause |
+|---------|--------------|
+| Record never created | `domainFilters` doesn't match the host; wrong `sources`; Ingress has no host |
+| Record created but `dig` fails | etcd `path` ≠ ExternalDNS `COREDNS_PREFIX`; querying the wrong IP |
+| Resolves but unreachable | MetalLB pool overlaps the LAN/DHCP range, or L2 speaker not on the node holding the IP |
+| Stale records after teardown | `policy` set to `upsert-only` instead of `sync` |
