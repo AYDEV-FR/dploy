@@ -110,10 +110,16 @@ func main() {
 	})
 
 	// Public API endpoints — catalog listing is gated by CATALOG_ENABLED so a
-	// "run-only" deployment doesn't expose the full template list.
-	if cfg.CatalogEnabled {
-		app.Get("/api/environments/available", envHandler.ListAvailable)
-	}
+	// "run-only" deployment doesn't expose the full template list. The route is
+	// always registered to return a clean JSON 404 when off (otherwise an
+	// unmatched /api/... path falls through to either the auth middleware or
+	// the SPA catch-all, neither of which makes sense for an API client).
+	app.Get("/api/environments/available", func(c *fiber.Ctx) error {
+		if !cfg.CatalogEnabled {
+			return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Error: "catalog disabled"})
+		}
+		return envHandler.ListAvailable(c)
+	})
 
 	// Public route - /run/{env} serves React SPA (handles auth in browser)
 	app.Get("/run/:env", func(c *fiber.Ctx) error {
@@ -123,9 +129,12 @@ func main() {
 	// Protected API endpoints
 	api := app.Group("/api", auth.Middleware(jwtValidator))
 	// User's instance list is gated by INSTANCES_LIST_ENABLED for the same reason.
-	if cfg.InstancesListEnabled {
-		api.Get("/environments", envHandler.ListUserEnvironments)
-	}
+	api.Get("/environments", func(c *fiber.Ctx) error {
+		if !cfg.InstancesListEnabled {
+			return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Error: "instances list disabled"})
+		}
+		return envHandler.ListUserEnvironments(c)
+	})
 	api.Get("/run/:env", runHandler.CreateEnvironment)
 	api.Get("/run/:env/status", runHandler.GetStatus)
 	api.Post("/run/:env/extend", runHandler.ExtendTTL)
