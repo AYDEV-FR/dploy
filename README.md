@@ -23,7 +23,7 @@ Dploy turns a Helm chart into a self-service, time-boxed environment: a user pic
 4. The environment is exposed at `<owner>-<uuid>.<baseDomain>` (or a custom `connectionURLTemplate`).
 5. When the TTL elapses, the operator's finalizer removes the `HelmRelease` and the workload namespace.
 
-See the [Architecture](https://dploy.dev/concepts/architecture/) docs for the full design.
+See the [Architecture](https://docs.dploy.dev/concepts/architecture/) docs for the full design.
 
 ## Quick start (local)
 
@@ -34,7 +34,7 @@ cd dploy
 make setup   # Kind cluster + Flux + Dploy (operator + API)
 ```
 
-Then follow the [Quick Start guide](https://dploy.dev/quick-start/) to fetch a token and launch your first environment. `make port-forward` exposes the API at `http://localhost:8080`.
+Then follow the [Quick Start guide](https://docs.dploy.dev/quick-start/) to fetch a token and launch your first environment. `make port-forward` exposes the API at `http://localhost:8080`.
 
 ## Installation (Helm)
 
@@ -55,7 +55,7 @@ helm install dploy ./charts/dploy \
   --set ingress.host="dploy.your-domain.com"
 ```
 
-Container images are published to GHCR: `ghcr.io/aydev-fr/dploy` (API) and `ghcr.io/aydev-fr/dploy-operator` (operator). Full options are in the [Installation](https://dploy.dev/installation/) docs.
+Container images are published to GHCR: `ghcr.io/aydev-fr/dploy` (API) and `ghcr.io/aydev-fr/dploy-operator` (operator). Full options are in the [Installation](https://docs.dploy.dev/installation/) docs.
 
 ## Define a template
 
@@ -84,7 +84,7 @@ spec:
       message: "Hello {{ .Owner }} — instance {{ .UUID }}"
 ```
 
-See [Templates & Instances](https://dploy.dev/concepts/templates/) for git charts, pools, parameters, and ownership.
+See [Templates & Instances](https://docs.dploy.dev/concepts/templates/) for git charts, pools, parameters, and ownership.
 
 ## API endpoints
 
@@ -104,7 +104,7 @@ See [Templates & Instances](https://dploy.dev/concepts/templates/) for git chart
 | GET | `/auth/callback` | — | OIDC provider callback |
 | GET | `/auth/logout` | — | Clear client-side auth state |
 
-Full reference: [API Endpoints](https://dploy.dev/api/endpoints/).
+Full reference: [API Endpoints](https://docs.dploy.dev/api/endpoints/).
 
 ## Development
 
@@ -121,15 +121,15 @@ Run `make help` for the full target list.
 
 ## Documentation
 
-Full documentation: **https://dploy.dev**
+Full documentation: **https://docs.dploy.dev**
 
-- [Quick Start](https://dploy.dev/quick-start/) — local Kind walkthrough
-- [Installation](https://dploy.dev/installation/) — Helm install and values reference
-- [Configuration](https://dploy.dev/configuration/) — environment variables and the `OperatorConfig`
-- [Architecture](https://dploy.dev/concepts/architecture/) — operator/API split, RBAC boundary, lifecycle
-- [Templates & Instances](https://dploy.dev/concepts/templates/) — define your catalog
-- [API Reference](https://dploy.dev/api/overview/) — REST API
-- Deployment: [OIDC Providers](https://dploy.dev/deployment/oidc-providers/) · [TLS Certificates](https://dploy.dev/deployment/tls-certificates/) · [ExternalDNS](https://dploy.dev/deployment/external-dns/) · [Security Considerations](https://dploy.dev/deployment/security-considerations/)
+- [Quick Start](https://docs.dploy.dev/quick-start/) — local Kind walkthrough
+- [Installation](https://docs.dploy.dev/installation/) — Helm install and values reference
+- [Configuration](https://docs.dploy.dev/configuration/) — environment variables and the `OperatorConfig`
+- [Architecture](https://docs.dploy.dev/concepts/architecture/) — operator/API split, RBAC boundary, lifecycle
+- [Templates & Instances](https://docs.dploy.dev/concepts/templates/) — define your catalog
+- [API Reference](https://docs.dploy.dev/api/overview/) — REST API
+- Deployment: [OIDC Providers](https://docs.dploy.dev/deployment/oidc-providers/) · [TLS Certificates](https://docs.dploy.dev/deployment/tls-certificates/) · [ExternalDNS](https://docs.dploy.dev/deployment/external-dns/) · [Security Considerations](https://docs.dploy.dev/deployment/security-considerations/)
 
 ## License
 
