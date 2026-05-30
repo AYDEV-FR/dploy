@@ -302,9 +302,11 @@ body[data-route='login'] .navbar {
 }
 .counter {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.4rem;
-  padding: 0.4rem 0.85rem;
+  height: 38px;
+  padding: 0 0.85rem;
+  box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -312,7 +314,7 @@ body[data-route='login'] .navbar {
   color: var(--muted);
 }
 .counter b {
-  font-size: 1.3rem;
+  font-size: 1.05rem;
   color: var(--accent);
 }
 
