@@ -43,6 +43,11 @@ config:
   extendTTL: 7200   # 2h, fallback extension granted per /extend
   serverHost: "0.0.0.0"
   serverPort: 8080
+  # UI feature flags. When false, the matching nav link is hidden in the web UI
+  # AND the matching API endpoint is not registered (returns 404). Setting both
+  # to false yields a run-only deployment: login + /run/:env still work.
+  catalogEnabled: true
+  instancesListEnabled: true
 
 # OIDC/JWT configuration
 auth:
