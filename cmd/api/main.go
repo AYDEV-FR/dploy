@@ -8,6 +8,7 @@ import (
 	"github.com/AYDEV-FR/dploy/internal/handlers"
 	"github.com/AYDEV-FR/dploy/internal/kube"
 	"github.com/AYDEV-FR/dploy/internal/logger"
+	"github.com/AYDEV-FR/dploy/internal/models"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	fiberlogger "github.com/gofiber/fiber/v2/middleware/logger"
@@ -99,8 +100,20 @@ func main() {
 		app.Get("/auth/logout", oidcHandler.Logout)
 	}
 
-	// Public API endpoints
-	app.Get("/api/environments/available", envHandler.ListAvailable)
+	// Public UI feature flags — the web UI fetches this at bootstrap to hide
+	// nav links and skip disabled routes. No auth (the UI hasn't logged in yet).
+	app.Get("/api/ui-config", func(c *fiber.Ctx) error {
+		return c.JSON(models.UIConfigResponse{
+			CatalogEnabled:   cfg.CatalogEnabled,
+			InstancesEnabled: cfg.InstancesListEnabled,
+		})
+	})
+
+	// Public API endpoints — catalog listing is gated by CATALOG_ENABLED so a
+	// "run-only" deployment doesn't expose the full template list.
+	if cfg.CatalogEnabled {
+		app.Get("/api/environments/available", envHandler.ListAvailable)
+	}
 
 	// Public route - /run/{env} serves React SPA (handles auth in browser)
 	app.Get("/run/:env", func(c *fiber.Ctx) error {
@@ -109,7 +122,10 @@ func main() {
 
 	// Protected API endpoints
 	api := app.Group("/api", auth.Middleware(jwtValidator))
-	api.Get("/environments", envHandler.ListUserEnvironments)
+	// User's instance list is gated by INSTANCES_LIST_ENABLED for the same reason.
+	if cfg.InstancesListEnabled {
+		api.Get("/environments", envHandler.ListUserEnvironments)
+	}
 	api.Get("/run/:env", runHandler.CreateEnvironment)
 	api.Get("/run/:env/status", runHandler.GetStatus)
 	api.Post("/run/:env/extend", runHandler.ExtendTTL)

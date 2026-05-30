@@ -1,7 +1,26 @@
+import { api } from './api';
 import { consumeHashToken, isAuthenticated, login, logout, setToken, usernameFromToken } from './auth';
+import type { UIConfig } from './types';
 import { cancelRun, renderCatalog, renderEnvironments, runFlow, wireEnvActions } from './views';
 
 type RouteName = 'home' | 'catalog' | 'run' | 'login';
+
+// Defaults reflect a fully-enabled UI so the app stays usable even if the
+// /api/ui-config call fails (network glitch, older API). Replaced at bootstrap.
+let uiConfig: UIConfig = { catalogEnabled: true, instancesEnabled: true };
+
+/** Apply the feature flags to the nav and home-view DOM. Idempotent. */
+function applyUIConfig(): void {
+  const toggle = (id: string, hidden: boolean) => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = hidden;
+  };
+  toggle('nav-catalog', !uiConfig.catalogEnabled);
+  toggle('nav-instances', !uiConfig.instancesEnabled);
+  toggle('btn-new-instance', !uiConfig.catalogEnabled);
+  toggle('env-list', !uiConfig.instancesEnabled);
+  toggle('env-list-disabled', uiConfig.instancesEnabled);
+}
 
 const MOON =
   '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>';
@@ -64,13 +83,21 @@ function route(): void {
     setActiveNav(null);
     runFlow(r.env!);
   } else if (r.name === 'catalog') {
+    // Catalog disabled by the API → bounce to the home view (which itself may
+    // be the run-only fallback if instances are also disabled).
+    if (!uiConfig.catalogEnabled) {
+      navigate('/');
+      return;
+    }
     show('catalog');
     setActiveNav('/catalog');
     renderCatalog();
   } else {
     show('home');
     setActiveNav('/');
-    renderEnvironments();
+    // Skip the instance fetch when listing is disabled; the static fallback
+    // div in the home view (toggled by applyUIConfig) explains the deployment.
+    if (uiConfig.instancesEnabled) renderEnvironments();
   }
 }
 
@@ -127,4 +154,17 @@ if (import.meta.env.DEV && localStorage.getItem('dploy-demo') !== 'off' && !isAu
 applyThemeIcon();
 wireEnvActions();
 initInteractions();
-route();
+
+// Fetch UI feature flags before the first route so disabled views never flash.
+api
+  .getUIConfig()
+  .then((cfg) => {
+    uiConfig = cfg;
+  })
+  .catch(() => {
+    /* keep defaults (all enabled) — UI stays usable even if the call fails */
+  })
+  .finally(() => {
+    applyUIConfig();
+    route();
+  });

@@ -4,6 +4,7 @@ import type {
   EnvironmentStatusResponse,
   ExtendTTLResponse,
   RunEnvironmentResponse,
+  UIConfig,
   UserEnvironmentsResponse,
 } from './types';
 
@@ -13,7 +14,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
   };
-  if (token && !path.includes('/available')) {
+  if (token && !path.includes('/available') && !path.includes('/ui-config')) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
@@ -40,6 +41,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  getUIConfig: () => request<UIConfig>('/api/ui-config'),
   getAvailable: () => request<AvailableEnvironment[]>('/api/environments/available'),
   getUserEnvironments: () => request<UserEnvironmentsResponse>('/api/environments'),
   run: (name: string) => request<RunEnvironmentResponse>(`/api/run/${encodeURIComponent(name)}`),

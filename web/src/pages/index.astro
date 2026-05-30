@@ -36,8 +36,8 @@ const lockIcon =
           <span>Dploy</span>
         </a>
         <nav class="nav-links">
-          <a class="nav-link" data-link href="/"><Fragment set:html={gridIcon} /> My Instances</a>
-          <a class="nav-link" data-link href="/catalog"><Fragment set:html={catalogIcon} /> Catalog</a>
+          <a id="nav-instances" class="nav-link" data-link href="/"><Fragment set:html={gridIcon} /> My Instances</a>
+          <a id="nav-catalog" class="nav-link" data-link href="/catalog"><Fragment set:html={catalogIcon} /> Catalog</a>
         </nav>
         <div class="nav-actions">
           <button class="btn-icon" id="btn-theme" type="button" title="Toggle theme" aria-label="Toggle theme"></button>
@@ -78,10 +78,14 @@ const lockIcon =
               <div class="head-actions">
                 <span class="counter" id="env-counter"></span>
                 <button class="btn-icon" id="btn-refresh" type="button" title="Refresh"><Fragment set:html={refreshIcon} /></button>
-                <a class="btn btn-primary" data-link href="/catalog"><Fragment set:html={plusIcon} /> New Instance</a>
+                <a id="btn-new-instance" class="btn btn-primary" data-link href="/catalog"><Fragment set:html={plusIcon} /> New Instance</a>
               </div>
             </div>
             <div class="env-list" id="env-list"></div>
+            <!-- Shown when INSTANCES_LIST_ENABLED=false: nothing to list, only direct /run/:env links work. -->
+            <div class="state" id="env-list-disabled" hidden>
+              This deployment doesn't expose an instance list. Launch an environment via a direct <code>/run/&lt;name&gt;</code> link.
+            </div>
           </div>
         </div>
       </section>

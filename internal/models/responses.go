@@ -67,6 +67,13 @@ type ExtendResponse struct {
 	ExpiresAt string `json:"expiresAt"`
 }
 
+// UIConfigResponse exposes the API-side feature flags the web UI needs to know
+// at bootstrap to hide nav links and skip disabled routes. Public (no auth).
+type UIConfigResponse struct {
+	CatalogEnabled   bool `json:"catalogEnabled"`
+	InstancesEnabled bool `json:"instancesEnabled"`
+}
+
 type HealthResponse struct {
 	Status string `json:"status"`
 }
