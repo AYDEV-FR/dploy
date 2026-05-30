@@ -32,6 +32,12 @@ type Config struct {
 	ServerHost string
 	ServerPort string
 
+	// UI feature flags. When false, the corresponding nav link is hidden in the
+	// web UI AND the matching API endpoint is not registered (returns 404).
+	// Disabling both yields a run-only deployment: login + /run/:env still work.
+	CatalogEnabled       bool
+	InstancesListEnabled bool
+
 	// Debug
 	Debug bool
 }
@@ -65,6 +71,10 @@ func Load() (*Config, error) {
 		// Server
 		ServerHost: getEnv("SERVER_HOST", "0.0.0.0"),
 		ServerPort: getEnv("SERVER_PORT", "8080"),
+
+		// UI feature flags
+		CatalogEnabled:       getEnvAsBool("CATALOG_ENABLED", true),
+		InstancesListEnabled: getEnvAsBool("INSTANCES_LIST_ENABLED", true),
 
 		// Debug
 		Debug: getEnvAsBool("DEBUG", false),

@@ -69,3 +69,9 @@ export interface EnvironmentStatusResponse {
 export interface ExtendTTLResponse {
   expiresAt: string;
 }
+
+/** UI feature flags fetched at bootstrap (public, no auth). */
+export interface UIConfig {
+  catalogEnabled: boolean;
+  instancesEnabled: boolean;
+}
