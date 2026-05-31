@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"sort"
+	"time"
+
 	"github.com/AYDEV-FR/dploy/internal/kube"
 	"github.com/AYDEV-FR/dploy/internal/models"
 	"github.com/gofiber/fiber/v2"
@@ -17,35 +20,43 @@ func NewAdminHandler(kubeClient *kube.Client) *AdminHandler {
 }
 
 // ListAllInstances answers `GET /api/admin/instances`: every DployInstance
-// across all owners (including pool members). The response shape matches
-// UserEnvironmentResponse so the Manager UI can reuse the env-list rendering;
-// `shared` and `owner` flag the cross-owner context.
+// across all owners (including pool members), shaped like `kubectl get
+// dployinstance` for the Manager UI's table. Sorted by template then name so
+// the order is stable across reloads.
 func (h *AdminHandler) ListAllInstances(c *fiber.Ctx) error {
 	instances, err := h.kubeClient.ListAllInstances(c.Context())
 	if err != nil {
 		return internalError(c, err)
 	}
+	sort.Slice(instances, func(i, j int) bool {
+		if instances[i].Spec.TemplateRef != instances[j].Spec.TemplateRef {
+			return instances[i].Spec.TemplateRef < instances[j].Spec.TemplateRef
+		}
+		return instances[i].Name < instances[j].Name
+	})
 
-	out := make([]models.UserEnvironmentResponse, 0, len(instances))
+	out := make([]models.AdminInstanceRow, 0, len(instances))
 	for i := range instances {
 		inst := &instances[i]
-		out = append(out, models.UserEnvironmentResponse{
-			Name:              inst.Spec.TemplateRef,
-			UUID:              inst.Status.UUID,
-			Status:            instanceStatus(inst),
-			URL:               inst.Status.URL,
-			ExpiresAt:         instanceExpiresAt(inst),
-			ExtendCount:       kube.ExtendCount(inst),
-			IsUnlimited:       inst.Spec.TTLSeconds == -1,
-			Owner:             inst.Spec.Owner,
-			Shared:            true, // admin view — everything is "someone else's" perspective
-			ConnectionType:    string(inst.Status.ConnectionType),
-			ConnectionMessage: inst.Status.ConnectionMessage,
+		phase := string(inst.Status.Phase)
+		if phase == "" {
+			phase = "Pending"
+		}
+		out = append(out, models.AdminInstanceRow{
+			Name:        inst.Name,
+			Template:    inst.Spec.TemplateRef,
+			Owner:       inst.Spec.Owner,
+			Phase:       phase,
+			URL:         inst.Status.URL,
+			ExpiresAt:   instanceExpiresAt(inst),
+			CreatedAt:   inst.CreationTimestamp.UTC().Format(time.RFC3339),
+			Namespace:   inst.Status.Namespace,
+			UUID:        inst.Status.UUID,
+			IsUnlimited: inst.Spec.TTLSeconds == -1,
 		})
 	}
-	return c.JSON(models.UserEnvironmentsListResponse{
-		Environments: out,
-		Count:        len(out),
-		Limit:        -1,
+	return c.JSON(models.AdminInstancesListResponse{
+		Instances: out,
+		Count:     len(out),
 	})
 }

@@ -85,6 +85,29 @@ type MeResponse struct {
 	Admin    bool   `json:"admin"`
 }
 
+// AdminInstanceRow is the per-row shape served by GET /api/admin/instances —
+// shaped like `kubectl get dployinstance` for the Manager view, so it's not
+// the same as UserEnvironmentResponse (no template description, no quota
+// fields, and the instance's metadata.name + creationTimestamp are first-class).
+type AdminInstanceRow struct {
+	Name        string `json:"name"`        // DployInstance metadata.name
+	Template    string `json:"template"`    // spec.templateRef
+	Owner       string `json:"owner"`       // spec.owner — empty for unclaimed pool members
+	Phase       string `json:"phase"`       // status.phase as the operator reports it
+	URL         string `json:"url"`         // status.url
+	ExpiresAt   string `json:"expiresAt"`   // RFC3339, empty for unlimited / unclaimed pool
+	CreatedAt   string `json:"createdAt"`   // metadata.creationTimestamp, RFC3339
+	Namespace   string `json:"namespace"`   // status.namespace (the workload ns)
+	UUID        string `json:"uuid"`        // status.uuid
+	IsUnlimited bool   `json:"isUnlimited"` // spec.ttlSeconds == -1
+}
+
+// AdminInstancesListResponse is the envelope around AdminInstanceRow.
+type AdminInstancesListResponse struct {
+	Instances []AdminInstanceRow `json:"instances"`
+	Count     int                `json:"count"`
+}
+
 type HealthResponse struct {
 	Status string `json:"status"`
 }
