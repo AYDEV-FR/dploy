@@ -119,6 +119,21 @@ async function onEnvAction(action: string, name: string): Promise<void> {
 }
 
 /* ---------- Manager (admin) ---------- */
+
+/** Compact, kubectl-style "since createdAt" age (e.g. "3h12m", "2d", "47s"). */
+function ageSince(iso: string): string {
+  if (!iso) return '—';
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return '—';
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h${m % 60 ? (m % 60) + 'm' : ''}`;
+  return `${Math.floor(h / 24)}d`;
+}
+
 export async function renderManager(): Promise<void> {
   const list = $('#manager-list');
   const counter = $('#manager-counter');
@@ -127,40 +142,54 @@ export async function renderManager(): Promise<void> {
 
   try {
     const data = await api.getAllInstances();
-    const envs = data.environments || [];
-    if (counter) counter.innerHTML = `<b>${envs.length}</b><span>total</span>`;
+    const rows = data.instances || [];
+    if (counter) counter.innerHTML = `<b>${rows.length}</b><span>total</span>`;
 
-    if (envs.length === 0) {
+    if (rows.length === 0) {
       list.innerHTML = '<div class="state">No instances anywhere on the cluster.</div>';
       return;
     }
-    list.innerHTML = envs
-      .map((env) => {
-        const status = String(env.status || 'Unknown');
-        const ownerLabel = env.owner ? esc(env.owner) : '<span class="muted">unclaimed</span>';
-        const conn = connectionText(env);
-        const connBody = isInstructions(env)
-          ? `<code class="env-cmd">${esc(conn)}</code>`
-          : `<a class="env-url" href="${esc(env.url)}" target="_blank" rel="noopener">${esc(env.url)}</a>`;
-        return `
-        <div class="env-item">
-          <div class="env-emoji">${getIcon(env.icon || 'web')}</div>
-          <div class="env-main">
-            <div class="env-row">
-              <span class="env-name">${esc(env.name)}</span>
-              <span class="status ${esc(status.toLowerCase())}">${esc(status)}</span>
-              <span class="badge accent">owner: ${ownerLabel}</span>
-            </div>
-            ${connBody}
-            <div class="env-meta">
-              <span class="badge">uuid: ${esc(env.uuid)}</span>
-              ${env.expiresAt ? `<span class="badge">${SVG.clock} ${esc(formatRemaining(env.expiresAt))}</span>` : ''}
-              ${env.isUnlimited ? '<span class="badge accent">∞ unlimited</span>' : ''}
-            </div>
-          </div>
-        </div>`;
-      })
-      .join('');
+    list.innerHTML = `
+      <div class="kube-table-wrap">
+        <table class="kube-table">
+          <thead>
+            <tr>
+              <th>NAME</th>
+              <th>TEMPLATE</th>
+              <th>OWNER</th>
+              <th>PHASE</th>
+              <th>URL</th>
+              <th>EXPIRES</th>
+              <th>AGE</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows
+              .map((r) => {
+                const phaseCls = r.phase.toLowerCase();
+                const owner = r.owner ? esc(r.owner) : '<span class="muted">—</span>';
+                const url = r.url
+                  ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>`
+                  : '<span class="muted">—</span>';
+                const expires = r.isUnlimited
+                  ? '<span class="badge accent">∞</span>'
+                  : r.expiresAt
+                    ? `<span title="${esc(r.expiresAt)}">${esc(formatRemaining(r.expiresAt))}</span>`
+                    : '<span class="muted">—</span>';
+                return `<tr>
+                  <td><code>${esc(r.name)}</code></td>
+                  <td>${esc(r.template)}</td>
+                  <td>${owner}</td>
+                  <td><span class="status ${esc(phaseCls)}">${esc(r.phase)}</span></td>
+                  <td class="url-cell">${url}</td>
+                  <td>${expires}</td>
+                  <td><span title="${esc(r.createdAt)}">${esc(ageSince(r.createdAt))}</span></td>
+                </tr>`;
+              })
+              .join('')}
+          </tbody>
+        </table>
+      </div>`;
   } catch (err) {
     list.innerHTML = `<div class="state error">${esc((err as Error).message)}</div>`;
   }
