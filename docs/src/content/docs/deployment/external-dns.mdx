@@ -5,8 +5,8 @@ description: Automatic DNS for dynamic environments on bare-metal Kubernetes wit
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Every Dploy environment is reachable at `<owner>-<uuid>.<baseDomain>` (the operator's
-`.IngressHost`, e.g. `john-a1b2c3d4.env.dploy.dev`). Those hostnames are created and destroyed
+Every Dploy environment is reachable at `<template>-<uuid>.<baseDomain>` (the operator's
+`.Host`, e.g. `vscode-a1b2c3d4.env.dploy.dev`). Those hostnames are created and destroyed
 on the fly, so a static DNS zone is impractical — each environment needs a record published the
 moment its Ingress/`HTTPRoute` appears and removed when the instance expires.
 
@@ -28,7 +28,7 @@ records. This guide wires the self-hosted equivalent:
 The four components form a single chain, from environment creation to a resolvable hostname:
 
 1. The operator renders an **Ingress/`HTTPRoute`** for the instance with host
-   `john-a1b2c3d4.env.dploy.dev`.
+   `vscode-a1b2c3d4.env.dploy.dev`.
 2. **ExternalDNS** watches those objects, reads the LoadBalancer IP that **MetalLB** assigned to
    the ingress controller's `Service`, and writes a matching A record into **etcd**.
 3. **CoreDNS** is authoritative for `env.dploy.dev` and serves that record straight from etcd.
@@ -246,14 +246,14 @@ prefer to never delete records automatically.
 ## 5. Tie it back to Dploy
 
 Nothing extra is required on the Dploy side — the per-instance Ingress/`HTTPRoute` rendered from
-your template already carries `host: {{ .IngressHost }}`, which ExternalDNS keys off of. The end
+your template already carries `host: {{ .Host }}`, which ExternalDNS keys off of. The end
 result:
 
 1. A user launches an environment → operator renders an Ingress/`HTTPRoute` with host
-   `john-a1b2c3d4.env.dploy.dev`.
+   `vscode-a1b2c3d4.env.dploy.dev`.
 2. MetalLB has already assigned the ingress controller a LoadBalancer IP; ExternalDNS reads it
    from the object's status.
-3. ExternalDNS writes the A record into etcd; CoreDNS serves `john-a1b2c3d4.env.dploy.dev`.
+3. ExternalDNS writes the A record into etcd; CoreDNS serves `vscode-a1b2c3d4.env.dploy.dev`.
 4. The wildcard `*.env.dploy.dev` certificate covers TLS for the new host with no per-environment
    issuance.
 
@@ -279,7 +279,7 @@ kubectl -n external-dns exec -it statefulset/etcd -- \
   etcdctl get --prefix /skydns
 
 # CoreDNS answers from the zone (use its MetalLB IP)
-dig @192.168.1.241 john-a1b2c3d4.env.dploy.dev +short
+dig @192.168.1.241 vscode-a1b2c3d4.env.dploy.dev +short
 
 # MetalLB assigned the ingress controller an IP
 kubectl get svc -A | grep LoadBalancer
