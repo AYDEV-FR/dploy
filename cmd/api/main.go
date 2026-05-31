@@ -45,18 +45,18 @@ func main() {
 		"usernameClaim", cfg.JWTUsernameClaim,
 	)
 
-	// Initialize OIDC handler
+	// Initialize OIDC handler. discoverOIDCWithRetry already rides out the
+	// post-startup network-identity window; if it still fails, fall over so
+	// Kubernetes restarts the pod instead of running with /auth/login broken.
 	oidcHandler, err := auth.NewOIDCHandler(cfg)
 	if err != nil {
-		logger.Warn("OIDC handler initialization failed", "error", err)
-		logger.Info("OIDC login will not be available")
-	} else {
-		logger.Info("OIDC handler initialized", "issuer", cfg.OIDCIssuer)
-		logger.Debug("OIDC settings",
-			"clientID", cfg.OIDCClientID,
-			"redirectURL", cfg.OIDCRedirectURL,
-		)
+		logger.Fatal("OIDC handler initialization failed after retries; exiting for restart", "error", err)
 	}
+	logger.Info("OIDC handler initialized", "issuer", cfg.OIDCIssuer)
+	logger.Debug("OIDC settings",
+		"clientID", cfg.OIDCClientID,
+		"redirectURL", cfg.OIDCRedirectURL,
+	)
 
 	// Initialize handlers
 	healthHandler := handlers.NewHealthHandler(kubeClient)
