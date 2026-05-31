@@ -67,13 +67,17 @@ func workloadNamespace(owner, template, uid string) string {
 	return fmt.Sprintf("%s-%s-%s", truncate(o, maxSegment), truncate(sanitize(template), maxSegment), uid)
 }
 
-// ingressHost builds the default `<owner>-<uuid>.<baseDomain>` host.
-func ingressHost(owner, uid, baseDomain string) string {
-	o := sanitize(owner)
-	if o == "" {
-		o = "pool"
+// defaultHost builds the default `<template>-<uuid>.<baseDomain>` hostname.
+// The template name identifies the kind of environment (e.g. `vscode-abc.example`)
+// and stays consistent across on-demand and pool instances; the (random) UUID
+// disambiguates concurrent ones. Override per-template with connectionURLTemplate
+// when you need owner-based or otherwise structured hostnames.
+func defaultHost(templateName, uid, baseDomain string) string {
+	t := sanitize(templateName)
+	if t == "" {
+		t = "env"
 	}
-	return fmt.Sprintf("%s-%s.%s", o, uid, baseDomain)
+	return fmt.Sprintf("%s-%s.%s", t, uid, baseDomain)
 }
 
 func firstNonEmpty(vals ...string) string {

@@ -36,7 +36,7 @@ spec:
   valuesTemplate: |
     ingress:
       enabled: true
-      host: "{{ .IngressHost }}"
+      host: "{{ .Host }}"
     user: "{{ .Owner }}"
 
   ttl:
@@ -161,7 +161,7 @@ spec:
 ### Values templating
 
 `valuesTemplate` is rendered with Go `text/template` + [sprig](https://masterminds.github.io/sprig/) against the instance context
-(`.Owner`, `.UUID`, `.IngressHost`, `.URL`, `.Params`, `.Claims`, `.Config.Values`, …). The
+(`.Owner`, `.UUID`, `.Host`, `.URL`, `.Params`, `.Claims`, `.Config.Values`, …). The
 result is parsed as YAML and handed to the `HelmRelease`.
 
 ```yaml
@@ -170,7 +170,7 @@ valuesTemplate: |
   sessionId: "{{ .UUID }}"
   email: "{{ .Claims.email }}"
   ingress:
-    host: "{{ .IngressHost }}"
+    host: "{{ .Host }}"
   {{- if eq .Params.size "large" }}
   resources:
     limits: { cpu: "2", memory: 4Gi }

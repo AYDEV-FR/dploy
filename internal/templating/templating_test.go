@@ -11,20 +11,20 @@ import (
 
 func TestRender(t *testing.T) {
 	data := &Data{
-		Owner:       "alice",
-		UUID:        "abc12345",
-		BaseDomain:  "env.dploy.dev",
-		IngressHost: "alice-abc12345.env.dploy.dev",
-		Params:      map[string]string{"size": "large"},
-		Claims:      map[string]any{"email": "a@b.c"},
+		Owner:      "alice",
+		UUID:       "abc12345",
+		BaseDomain: "env.dploy.dev",
+		Host:       "vscode-abc12345.env.dploy.dev",
+		Params:     map[string]string{"size": "large"},
+		Claims:     map[string]any{"email": "a@b.c"},
 	}
 	out, err := Render("t",
-		`{{ .Owner }}|{{ .UUID }}|{{ .Params.size }}|{{ .Claims.email }}|{{ upper "x" }}|{{ .IngressHost }}`,
+		`{{ .Owner }}|{{ .UUID }}|{{ .Params.size }}|{{ .Claims.email }}|{{ upper "x" }}|{{ .Host }}`,
 		data)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	want := "alice|abc12345|large|a@b.c|X|alice-abc12345.env.dploy.dev"
+	want := "alice|abc12345|large|a@b.c|X|vscode-abc12345.env.dploy.dev"
 	if out != want {
 		t.Errorf("Render = %q, want %q", out, want)
 	}
