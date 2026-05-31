@@ -59,7 +59,7 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 	}
 
 	// Discover OIDC endpoints from internal issuer (for backend calls).
-	discovery, err := handler.discoverOIDC(cfg.OIDCIssuer)
+	discovery, err := handler.discoverOIDCWithRetry(cfg.OIDCIssuer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover OIDC endpoints from %s: %w", cfg.OIDCIssuer, err)
 	}
@@ -70,7 +70,7 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 	// This handles cases where the pod can't access the public URL directly.
 	if cfg.OIDCPublicIssuer != "" && cfg.OIDCPublicIssuer != cfg.OIDCIssuer {
 		// Try to discover from public issuer first.
-		publicDiscovery, err := handler.discoverOIDC(cfg.OIDCPublicIssuer)
+		publicDiscovery, err := handler.discoverOIDCWithRetry(cfg.OIDCPublicIssuer)
 		if err != nil {
 			// Extract base URLs (scheme + host) for replacement.
 			internalBase := extractBaseURL(cfg.OIDCIssuer)
@@ -112,6 +112,37 @@ func extractBaseURL(rawURL string) string {
 		return rawURL
 	}
 	return fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
+}
+
+// discoverOIDCWithRetry calls discoverOIDC with exponential backoff to ride out
+// transient startup conditions — typically a brief window after pod start where
+// the network identity is not yet propagated (Cilium et al.) and DNS / egress
+// returns EPERM. Most failures resolve within a few seconds; if discovery still
+// fails after the budget, the last error is returned.
+func (h *OIDCHandler) discoverOIDCWithRetry(issuer string) (*OIDCDiscovery, error) {
+	const attempts = 5
+	delay := 500 * time.Millisecond
+	var lastErr error
+	for i := 1; i <= attempts; i++ {
+		d, err := h.discoverOIDC(issuer)
+		if err == nil {
+			if i > 1 {
+				logger.Info("OIDC discovery succeeded after retries", "issuer", issuer, "attempts", i)
+			}
+			return d, nil
+		}
+		lastErr = err
+		if i == attempts {
+			break
+		}
+		logger.Info("OIDC discovery attempt failed, retrying",
+			"issuer", issuer, "attempt", i, "nextDelay", delay, "error", err.Error())
+		time.Sleep(delay)
+		if delay < 4*time.Second {
+			delay *= 2
+		}
+	}
+	return nil, lastErr
 }
 
 // discoverOIDC fetches the OIDC discovery document from the issuer.
