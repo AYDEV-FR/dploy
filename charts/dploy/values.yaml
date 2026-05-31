@@ -48,12 +48,24 @@ config:
   # to false yields a run-only deployment: login + /run/:env still work.
   catalogEnabled: true
   instancesListEnabled: true
+  # Manager UI: cluster-wide admin view (lists all instances across owners).
+  # When true, the link is shown in the navbar ONLY to users whose JWT claims
+  # match auth.adminClaim / auth.adminValue below; when false, hidden for all
+  # and /api/admin/* returns 404.
+  managerEnabled: true
 
 # OIDC/JWT configuration
 auth:
   jwksURL: ""
   jwtIssuer: ""
   jwtAudience: dploy
+
+  # Admin detection from the JWT. Examples:
+  #   adminClaim: is_admin   adminValue: "true"     (boolean claim)
+  #   adminClaim: role       adminValue: "admin"    (string claim)
+  #   adminClaim: groups     adminValue: "admin"    (list-membership claim)
+  adminClaim: is_admin
+  adminValue: "true"
   jwtUsernameClaim: preferred_username
   oidcClientID: dploy
   oidcClientSecret: ""

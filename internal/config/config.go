@@ -37,6 +37,15 @@ type Config struct {
 	// Disabling both yields a run-only deployment: login + /run/:env still work.
 	CatalogEnabled       bool
 	InstancesListEnabled bool
+	ManagerEnabled       bool
+
+	// Admin detection from JWT claims. The Manager UI (when enabled) and
+	// /api/admin/* endpoints are gated by this. Works with both boolean claims
+	// (AdminClaim="is_admin", AdminValue="true") and list-membership claims
+	// (AdminClaim="groups", AdminValue="admin"). String claims are matched by
+	// equality.
+	AdminClaim string
+	AdminValue string
 
 	// Debug
 	Debug bool
@@ -75,6 +84,11 @@ func Load() (*Config, error) {
 		// UI feature flags
 		CatalogEnabled:       getEnvAsBool("CATALOG_ENABLED", true),
 		InstancesListEnabled: getEnvAsBool("INSTANCES_LIST_ENABLED", true),
+		ManagerEnabled:       getEnvAsBool("MANAGER_ENABLED", true),
+
+		// Admin detection (JWT claim)
+		AdminClaim: getEnv("ADMIN_CLAIM", "is_admin"),
+		AdminValue: getEnv("ADMIN_VALUE", "true"),
 
 		// Debug
 		Debug: getEnvAsBool("DEBUG", false),

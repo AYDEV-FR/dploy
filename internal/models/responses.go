@@ -72,6 +72,17 @@ type ExtendResponse struct {
 type UIConfigResponse struct {
 	CatalogEnabled   bool `json:"catalogEnabled"`
 	InstancesEnabled bool `json:"instancesEnabled"`
+	ManagerEnabled   bool `json:"managerEnabled"`
+}
+
+// MeResponse carries the authenticated requester's view of themselves —
+// resolved username, owner key (after sanitization) and whether their claims
+// mark them as admin under the configured admin claim/value. Used by the web
+// UI to decide whether to show the Manager link.
+type MeResponse struct {
+	Username string `json:"username"`
+	Owner    string `json:"owner"`
+	Admin    bool   `json:"admin"`
 }
 
 type HealthResponse struct {

@@ -166,6 +166,17 @@ func (c *Client) ListOwnedInstances(ctx context.Context, owners []string) ([]dpl
 	return list.Items, nil
 }
 
+// ListAllInstances returns every DployInstance in the configured namespace —
+// cross-owner, including pool members. Intended for admin views (the Manager
+// UI); regular users should hit ListUserInstances / ListOwnedInstances.
+func (c *Client) ListAllInstances(ctx context.Context) ([]dployv1alpha1.DployInstance, error) {
+	var list dployv1alpha1.DployInstanceList
+	if err := c.c.List(ctx, &list, client.InNamespace(c.namespace)); err != nil {
+		return nil, err
+	}
+	return list.Items, nil
+}
+
 // GetUserInstance returns the user's instance of a template, or nil if none.
 func (c *Client) GetUserInstance(ctx context.Context, owner, templateRef string) (*dployv1alpha1.DployInstance, error) {
 	var list dployv1alpha1.DployInstanceList

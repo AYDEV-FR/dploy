@@ -3,6 +3,7 @@ import type {
   AvailableEnvironment,
   EnvironmentStatusResponse,
   ExtendTTLResponse,
+  Me,
   RunEnvironmentResponse,
   UIConfig,
   UserEnvironmentsResponse,
@@ -42,6 +43,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 export const api = {
   getUIConfig: () => request<UIConfig>('/api/ui-config'),
+  getMe: () => request<Me>('/api/me'),
+  getAllInstances: () => request<UserEnvironmentsResponse>('/api/admin/instances'),
   getAvailable: () => request<AvailableEnvironment[]>('/api/environments/available'),
   getUserEnvironments: () => request<UserEnvironmentsResponse>('/api/environments'),
   run: (name: string) => request<RunEnvironmentResponse>(`/api/run/${encodeURIComponent(name)}`),

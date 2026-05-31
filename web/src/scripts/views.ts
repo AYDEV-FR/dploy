@@ -118,6 +118,54 @@ async function onEnvAction(action: string, name: string): Promise<void> {
   }
 }
 
+/* ---------- Manager (admin) ---------- */
+export async function renderManager(): Promise<void> {
+  const list = $('#manager-list');
+  const counter = $('#manager-counter');
+  if (!list) return;
+  list.innerHTML = '<div class="state">Loading…</div>';
+
+  try {
+    const data = await api.getAllInstances();
+    const envs = data.environments || [];
+    if (counter) counter.innerHTML = `<b>${envs.length}</b><span>total</span>`;
+
+    if (envs.length === 0) {
+      list.innerHTML = '<div class="state">No instances anywhere on the cluster.</div>';
+      return;
+    }
+    list.innerHTML = envs
+      .map((env) => {
+        const status = String(env.status || 'Unknown');
+        const ownerLabel = env.owner ? esc(env.owner) : '<span class="muted">unclaimed</span>';
+        const conn = connectionText(env);
+        const connBody = isInstructions(env)
+          ? `<code class="env-cmd">${esc(conn)}</code>`
+          : `<a class="env-url" href="${esc(env.url)}" target="_blank" rel="noopener">${esc(env.url)}</a>`;
+        return `
+        <div class="env-item">
+          <div class="env-emoji">${getIcon(env.icon || 'web')}</div>
+          <div class="env-main">
+            <div class="env-row">
+              <span class="env-name">${esc(env.name)}</span>
+              <span class="status ${esc(status.toLowerCase())}">${esc(status)}</span>
+              <span class="badge accent">owner: ${ownerLabel}</span>
+            </div>
+            ${connBody}
+            <div class="env-meta">
+              <span class="badge">uuid: ${esc(env.uuid)}</span>
+              ${env.expiresAt ? `<span class="badge">${SVG.clock} ${esc(formatRemaining(env.expiresAt))}</span>` : ''}
+              ${env.isUnlimited ? '<span class="badge accent">∞ unlimited</span>' : ''}
+            </div>
+          </div>
+        </div>`;
+      })
+      .join('');
+  } catch (err) {
+    list.innerHTML = `<div class="state error">${esc((err as Error).message)}</div>`;
+  }
+}
+
 /* ---------- Catalog ---------- */
 interface Group {
   direct: AvailableEnvironment[];

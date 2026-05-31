@@ -20,3 +20,6 @@ data:
   {{- end }}
   CATALOG_ENABLED: {{ .Values.config.catalogEnabled | quote }}
   INSTANCES_LIST_ENABLED: {{ .Values.config.instancesListEnabled | quote }}
+  MANAGER_ENABLED: {{ .Values.config.managerEnabled | quote }}
+  ADMIN_CLAIM: {{ .Values.auth.adminClaim | quote }}
+  ADMIN_VALUE: {{ .Values.auth.adminValue | quote }}

@@ -74,4 +74,12 @@ export interface ExtendTTLResponse {
 export interface UIConfig {
   catalogEnabled: boolean;
   instancesEnabled: boolean;
+  managerEnabled: boolean;
+}
+
+/** Authenticated requester's view of themselves (returned by GET /api/me). */
+export interface Me {
+  username: string;
+  owner: string;
+  admin: boolean;
 }
