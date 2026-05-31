@@ -5,7 +5,7 @@ description: Automatic DNS for dynamic environments on bare-metal Kubernetes wit
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Every Dploy environment is reachable at `<template>-<uuid>.<baseDomain>` (the operator's
+Every Dploy environment is reachable at `<name>-<uuid>.<baseDomain>` (the operator's
 `.Host`, e.g. `vscode-a1b2c3d4.env.dploy.dev`). Those hostnames are created and destroyed
 on the fly, so a static DNS zone is impractical — each environment needs a record published the
 moment its Ingress/`HTTPRoute` appears and removed when the instance expires.

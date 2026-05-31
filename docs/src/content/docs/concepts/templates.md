@@ -151,7 +151,7 @@ The instance URL is resolved with this precedence:
 
 1. `DployTemplate.spec.connectionURLTemplate`
 2. `OperatorConfig.spec.connectionURLTemplate`
-3. fallback `https://<owner>-<uuid>.<baseDomain>`
+3. fallback `https://<name>-<uuid>.<baseDomain>` (the bare `.Host`)
 
 ```yaml
 spec:

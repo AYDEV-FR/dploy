@@ -101,7 +101,7 @@ The data context exposes:
 | `.Owner` | sanitized owner (empty for unclaimed pool members) |
 | `.UUID` | immutable short UUID |
 | `.BaseDomain` | `OperatorConfig.baseDomain` |
-| `.Host` | `<template>-<uuid>.<baseDomain>` |
+| `.Host` | `<name>-<uuid>.<baseDomain>` |
 | `.URL` | resolved connection URL (available to `valuesTemplate`) |
 | `.Namespace` | workload namespace |
 | `.Template` | the `DployTemplate` object |

@@ -27,6 +27,110 @@ If you don't already run Flux, the source and helm controllers are enough:
 flux install --components=source-controller,helm-controller
 ```
 
+## Routing: Ingress, Gateway API or both
+
+Dploy itself is one HTTP service that needs to be reachable at a single URL (e.g. `dploy.example.com`). Per-instance environments need a **hostname per instance** (`<name>-<uid>.<baseDomain>`), routed to the workload Service the chart creates.
+
+Either routing technology works for both layers — and you can mix them (e.g. Gateway API for the per-instance traffic, Ingress for the dploy API). Pick what your cluster already runs.
+
+### Option A — Ingress controller (nginx, traefik, cilium-ingress, …)
+
+The chart's `ingress.*` values render an `Ingress` for the dploy API directly:
+
+```yaml
+ingress:
+  enabled: true
+  className: nginx
+  host: dploy.example.com
+  annotations:
+    # If your ingress controller doesn't set per-Ingress addresses (e.g. cilium
+    # shared LB), pin external-dns to the shared LB IP yourself.
+    external-dns.alpha.kubernetes.io/target: "10.0.0.42"
+  tls:
+    - secretName: dploy-tls
+      hosts: [dploy.example.com]
+```
+
+Per-instance routing is set in each `DployTemplate.valuesTemplate` — most community charts expose `ingress.*`:
+
+```yaml
+valuesTemplate: |
+  ingress:
+    enabled: true
+    className: nginx
+    hosts:
+      - host: "{{ .Host }}"
+        paths: [{ path: /, pathType: Prefix }]
+```
+
+external-dns picks up Ingress out of the box with `--source=ingress`.
+
+### Option B — Gateway API (cilium agentgateway, envoy-gateway, istio, …)
+
+Deploy a `Gateway` once (cluster-wide or per-namespace), then dploy and every instance attaches as an `HTTPRoute`:
+
+```yaml
+# Cluster Gateway — owned outside the dploy chart.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: dploy-gateway
+  namespace: gateway-system
+spec:
+  gatewayClassName: agentgateway      # or envoy, istio, …
+  listeners:
+    - { name: http, port: 80, protocol: HTTP, allowedRoutes: { namespaces: { from: All } } }
+```
+
+Dploy chart doesn't render an HTTPRoute today; if you want the dploy API on Gateway API, drop a route in next to it:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: dploy, namespace: dploy-system }
+spec:
+  parentRefs: [{ name: dploy-gateway, namespace: gateway-system }]
+  hostnames: [dploy.example.com]
+  rules:
+    - matches: [{ path: { type: PathPrefix, value: / } }]
+      backendRefs: [{ name: dploy, port: 80 }]
+```
+
+Per-instance routing again lives in `valuesTemplate` — charts in [`AYDEV-FR/dploy-charts`](https://github.com/AYDEV-FR/dploy-charts) expose `httpRoute.*`:
+
+```yaml
+valuesTemplate: |
+  httpRoute:
+    enabled: true
+    parentRefs:
+      - { name: dploy-gateway, namespace: gateway-system }
+    hostnames: ["{{ .Host }}"]
+    annotations:
+      external-dns.alpha.kubernetes.io/target: "10.0.0.42"
+```
+
+#### external-dns + HTTPRoute
+
+external-dns ≥ 0.14 supports the Gateway API but **the source is opt-in** and requires an extra RBAC verb the default chart doesn't grant. Patch both:
+
+```bash
+# 1. Enable the source.
+kubectl patch deploy -n dns-system external-dns --type=json \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--source=gateway-httproute"}]'
+
+# 2. Grant list/watch on namespaces (the gateway-httproute source needs it
+#    for cross-namespace parentRef resolution; without it the pod crash-loops
+#    with `failed to sync *v1.Namespace: context deadline exceeded`).
+kubectl patch clusterrole external-dns --type=json \
+  -p='[{"op":"add","path":"/rules/-","value":{"apiGroups":[""],"resources":["namespaces"],"verbs":["get","list","watch"]}}]'
+```
+
+The DNS target comes from the parent `Gateway`'s `status.addresses` by default. Override with `external-dns.alpha.kubernetes.io/target` on the `HTTPRoute` itself when the gateway has no address (e.g. it's behind a separate LB), as shown in the `valuesTemplate` snippet above.
+
+### Option C — Mixed
+
+Common pattern: dploy itself on a stable Ingress (often pre-existing), per-instance environments on the Gateway API. Both work concurrently; external-dns just needs both `--source=ingress` (default) and `--source=gateway-httproute` (opt-in).
+
 ## Install with Helm
 
 The chart deploys **both** components (operator + API) and installs the CRDs.

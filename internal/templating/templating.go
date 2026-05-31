@@ -31,7 +31,7 @@ type Data struct {
 	UUID string
 	// BaseDomain is the cluster-wide ingress base domain.
 	BaseDomain string
-	// Host is the precomputed default `<template>-<uuid>.<baseDomain>` hostname.
+	// Host is the precomputed default `<name>-<uuid>.<baseDomain>` hostname.
 	// Routing-neutral (works for Ingress, HTTPRoute, anything host-based).
 	// Override per-template via connectionURLTemplate (e.g. to use .Owner instead).
 	Host string
