@@ -62,6 +62,8 @@ func main() {
 	healthHandler := handlers.NewHealthHandler(kubeClient)
 	envHandler := handlers.NewEnvironmentsHandler(kubeClient)
 	runHandler := handlers.NewRunHandler(kubeClient, cfg)
+	meHandler := handlers.NewMeHandler(cfg)
+	adminHandler := handlers.NewAdminHandler(kubeClient)
 
 	// Create Fiber app
 	app := fiber.New(fiber.Config{
@@ -106,6 +108,7 @@ func main() {
 		return c.JSON(models.UIConfigResponse{
 			CatalogEnabled:   cfg.CatalogEnabled,
 			InstancesEnabled: cfg.InstancesListEnabled,
+			ManagerEnabled:   cfg.ManagerEnabled,
 		})
 	})
 
@@ -139,6 +142,18 @@ func main() {
 	api.Get("/run/:env/status", runHandler.GetStatus)
 	api.Post("/run/:env/extend", runHandler.ExtendTTL)
 	api.Delete("/run/:env", runHandler.DeleteEnvironment)
+	// Self-discovery: lets the UI know who it's logged in as and whether to
+	// surface admin affordances. Always available behind auth.
+	api.Get("/me", meHandler.Get)
+
+	// Admin endpoints — gated by MANAGER_ENABLED + the admin claim/value pair.
+	// 404 when disabled, 403 to non-admin requesters.
+	api.Get("/admin/instances", func(c *fiber.Ctx) error {
+		if !cfg.ManagerEnabled {
+			return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Error: "manager disabled"})
+		}
+		return c.Next()
+	}, auth.AdminMiddleware(cfg), adminHandler.ListAllInstances)
 
 	// SPA fallback - serve React app for all unmatched routes
 	app.Get("/*", func(c *fiber.Ctx) error {

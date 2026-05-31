@@ -1,15 +1,18 @@
 import { api } from './api';
 import { consumeHashToken, isAuthenticated, login, logout, setToken, usernameFromToken } from './auth';
-import type { UIConfig } from './types';
-import { cancelRun, renderCatalog, renderEnvironments, runFlow, wireEnvActions } from './views';
+import type { Me, UIConfig } from './types';
+import { cancelRun, renderCatalog, renderEnvironments, renderManager, runFlow, wireEnvActions } from './views';
 
-type RouteName = 'home' | 'catalog' | 'run' | 'login';
+type RouteName = 'home' | 'catalog' | 'manager' | 'run' | 'login';
 
 // Defaults reflect a fully-enabled UI so the app stays usable even if the
 // /api/ui-config call fails (network glitch, older API). Replaced at bootstrap.
-let uiConfig: UIConfig = { catalogEnabled: true, instancesEnabled: true };
+let uiConfig: UIConfig = { catalogEnabled: true, instancesEnabled: true, managerEnabled: true };
+// Discovered after auth; admin=false until /api/me succeeds, so the Manager
+// link stays hidden by default — fail-closed for an admin affordance.
+let me: Me | null = null;
 
-/** Apply the feature flags to the nav and home-view DOM. Idempotent. */
+/** Apply the feature flags + admin status to the nav and home-view DOM. Idempotent. */
 function applyUIConfig(): void {
   const toggle = (id: string, hidden: boolean) => {
     const el = document.getElementById(id);
@@ -20,6 +23,8 @@ function applyUIConfig(): void {
   toggle('btn-new-instance', !uiConfig.catalogEnabled);
   toggle('env-list', !uiConfig.instancesEnabled);
   toggle('env-list-disabled', uiConfig.instancesEnabled);
+  // Manager link is admin-AND-feature-gated.
+  toggle('nav-manager', !(uiConfig.managerEnabled && me?.admin));
 }
 
 const MOON =
@@ -59,6 +64,7 @@ function currentRoute(): { name: RouteName; env?: string } {
   const run = path.match(/^\/run\/(.+)$/);
   if (run) return { name: 'run', env: decodeURIComponent(run[1]!) };
   if (/^\/catalog\/?$/.test(path)) return { name: 'catalog' };
+  if (/^\/manager\/?$/.test(path)) return { name: 'manager' };
   return { name: 'home' };
 }
 
@@ -92,6 +98,16 @@ function route(): void {
     show('catalog');
     setActiveNav('/catalog');
     renderCatalog();
+  } else if (r.name === 'manager') {
+    // Manager is admin-only AND feature-gated; non-admin requests bounce home
+    // before any admin API call (the API would 403, but no need to hit it).
+    if (!uiConfig.managerEnabled || !me?.admin) {
+      navigate('/');
+      return;
+    }
+    show('manager');
+    setActiveNav('/manager');
+    renderManager();
   } else {
     show('home');
     setActiveNav('/');
@@ -117,8 +133,8 @@ function initInteractions(): void {
     const target = e.target as HTMLElement;
     const link = target.closest('a[data-link]') as HTMLAnchorElement | null;
     if (link) {
-      const me = e as MouseEvent;
-      if (me.metaKey || me.ctrlKey || me.shiftKey || link.target === '_blank') return;
+      const evt = e as MouseEvent;
+      if (evt.metaKey || evt.ctrlKey || evt.shiftKey || link.target === '_blank') return;
       e.preventDefault();
       navigate(link.getAttribute('href')!);
       return;
@@ -132,6 +148,9 @@ function initInteractions(): void {
     } else if (target.closest('#btn-refresh')) {
       e.preventDefault();
       renderEnvironments();
+    } else if (target.closest('#btn-manager-refresh')) {
+      e.preventDefault();
+      renderManager();
     } else if (target.closest('#btn-theme')) {
       e.preventDefault();
       const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
@@ -155,16 +174,20 @@ applyThemeIcon();
 wireEnvActions();
 initInteractions();
 
-// Fetch UI feature flags before the first route so disabled views never flash.
-api
-  .getUIConfig()
-  .then((cfg) => {
+// Fetch UI feature flags + (if authed) the requester's identity before the
+// first route so disabled views never flash and admin affordances appear
+// without a second paint. /api/me requires auth so it only runs when there's
+// a token; otherwise admin stays false (fail-closed).
+Promise.allSettled([
+  api.getUIConfig().then((cfg) => {
     uiConfig = cfg;
-  })
-  .catch(() => {
-    /* keep defaults (all enabled) — UI stays usable even if the call fails */
-  })
-  .finally(() => {
-    applyUIConfig();
-    route();
-  });
+  }),
+  isAuthenticated()
+    ? api.getMe().then((m) => {
+        me = m;
+      })
+    : Promise.resolve(),
+]).finally(() => {
+  applyUIConfig();
+  route();
+});
