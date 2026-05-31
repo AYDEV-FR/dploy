@@ -64,8 +64,8 @@ Dploy is split into two cooperating pieces:
 Each environment:
 
 1. Gets an immutable 8-character UUID.
-2. Is deployed into its own namespace `<owner>-<template>-<uuid>`.
-3. Is exposed at a URL derived from `connectionURLTemplate` (default `<owner>-<uuid>.<baseDomain>`).
+2. Is deployed into its own namespace `<owner>-<name>-<uuid>`.
+3. Is exposed at a URL derived from `connectionURLTemplate` (default `<name>-<uuid>.<baseDomain>`).
 4. Expires and is garbage-collected after its TTL.
 
 ## Next steps

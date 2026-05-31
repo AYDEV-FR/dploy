@@ -57,7 +57,7 @@ func truncate(s string, n int) string {
 }
 
 // workloadNamespace builds the per-instance namespace name as
-// `<owner>-<template>-<uuid>` (owner "pool" for unclaimed pool members),
+// `<owner>-<name>-<uuid>` (owner "pool" for unclaimed pool members),
 // matching the pre-operator `<username>-<env>-<uuid>` convention.
 func workloadNamespace(owner, template, uid string) string {
 	o := sanitize(owner)
@@ -67,7 +67,7 @@ func workloadNamespace(owner, template, uid string) string {
 	return fmt.Sprintf("%s-%s-%s", truncate(o, maxSegment), truncate(sanitize(template), maxSegment), uid)
 }
 
-// defaultHost builds the default `<template>-<uuid>.<baseDomain>` hostname.
+// defaultHost builds the default `<name>-<uuid>.<baseDomain>` hostname.
 // The template name identifies the kind of environment (e.g. `vscode-abc.example`)
 // and stays consistent across on-demand and pool instances; the (random) UUID
 // disambiguates concurrent ones. Override per-template with connectionURLTemplate
