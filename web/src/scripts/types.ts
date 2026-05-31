@@ -83,3 +83,22 @@ export interface Me {
   owner: string;
   admin: boolean;
 }
+
+/** One row of `GET /api/admin/instances` — shaped like `kubectl get dployinstance`. */
+export interface AdminInstanceRow {
+  name: string;
+  template: string;
+  owner: string;
+  phase: string;
+  url: string;
+  expiresAt: string;
+  createdAt: string;
+  namespace: string;
+  uuid: string;
+  isUnlimited: boolean;
+}
+
+export interface AdminInstancesListResponse {
+  instances: AdminInstanceRow[];
+  count: number;
+}
