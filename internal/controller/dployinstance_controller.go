@@ -114,7 +114,7 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	// Resolve the connection URL: template override → config default → fallback host.
-	url := "https://" + data.IngressHost
+	url := "https://" + data.Host
 	if urlTmpl := firstNonEmpty(tmpl.Spec.ConnectionURLTemplate, eff.ConnectionURLTemplate); urlTmpl != "" {
 		rendered, rerr := templating.Render("connectionURL", urlTmpl, data)
 		if rerr != nil {
@@ -304,7 +304,7 @@ func (r *DployInstanceReconciler) buildData(inst *dployv1alpha1.DployInstance, t
 		Owner:       sanitize(owner),
 		UUID:        inst.Status.UUID,
 		BaseDomain:  eff.BaseDomain,
-		IngressHost: ingressHost(owner, inst.Status.UUID, eff.BaseDomain),
+		Host:        defaultHost(inst.Spec.TemplateRef, inst.Status.UUID, eff.BaseDomain),
 		Namespace:   targetNS,
 		Template:    tmpl,
 		Params:      params,

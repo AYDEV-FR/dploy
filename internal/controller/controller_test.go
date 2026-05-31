@@ -38,9 +38,13 @@ func TestWorkloadNamespace(t *testing.T) {
 	}
 }
 
-func TestIngressHost(t *testing.T) {
-	if got := ingressHost("Alice", "abc12345", "env.dploy.dev"); got != "alice-abc12345.env.dploy.dev" {
+func TestDefaultHost(t *testing.T) {
+	if got := defaultHost("VSCode", "abc12345", "env.dploy.dev"); got != "vscode-abc12345.env.dploy.dev" {
 		t.Errorf("got %q", got)
+	}
+	// Empty template name falls back to "env" so the host is still valid.
+	if got := defaultHost("", "abc12345", "env.dploy.dev"); got != "env-abc12345.env.dploy.dev" {
+		t.Errorf("empty fallback: got %q", got)
 	}
 }
 
