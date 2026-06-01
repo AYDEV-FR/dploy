@@ -318,6 +318,37 @@ body[data-route='login'] .navbar {
   color: var(--accent);
 }
 
+/* ---------- Manager tabs ---------- */
+.tabs {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.tabs .tab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0.4rem 0.95rem;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.tabs .tab:hover {
+  color: var(--text);
+}
+.tabs .tab.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
 /* ---------- Manager kubectl-style table ---------- */
 .kube-table-wrap {
   overflow-x: auto;

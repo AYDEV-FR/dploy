@@ -1,6 +1,7 @@
 import { clearToken, getToken, login } from './auth';
 import type {
   AdminInstancesListResponse,
+  AdminTemplatesListResponse,
   AvailableEnvironment,
   EnvironmentStatusResponse,
   ExtendTTLResponse,
@@ -46,6 +47,7 @@ export const api = {
   getUIConfig: () => request<UIConfig>('/api/ui-config'),
   getMe: () => request<Me>('/api/me'),
   getAllInstances: () => request<AdminInstancesListResponse>('/api/admin/instances'),
+  getAllTemplates: () => request<AdminTemplatesListResponse>('/api/admin/templates'),
   getAvailable: () => request<AvailableEnvironment[]>('/api/environments/available'),
   getUserEnvironments: () => request<UserEnvironmentsResponse>('/api/environments'),
   run: (name: string) => request<RunEnvironmentResponse>(`/api/run/${encodeURIComponent(name)}`),
