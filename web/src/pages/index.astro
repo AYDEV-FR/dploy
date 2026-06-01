@@ -113,21 +113,22 @@ const shieldIcon =
       <section id="view-manager" hidden>
         <div class="hero">
           <h1>Manager</h1>
-          <p>Cluster-wide admin view of every running instance.</p>
+          <p>Cluster-wide admin view of every running instance and every template.</p>
         </div>
         <div class="container">
           <div class="section">
             <div class="section-head">
-              <div>
-                <h2>All Instances</h2>
-                <p>Every environment across all owners and pools.</p>
+              <div class="tabs" role="tablist">
+                <button class="tab active" data-tab="instances" type="button" role="tab" aria-selected="true">Instances</button>
+                <button class="tab" data-tab="templates" type="button" role="tab" aria-selected="false">Templates</button>
               </div>
               <div class="head-actions">
                 <span class="counter" id="manager-counter"></span>
                 <button class="btn-icon" id="btn-manager-refresh" type="button" title="Refresh"><Fragment set:html={refreshIcon} /></button>
               </div>
             </div>
-            <div class="env-list" id="manager-list"></div>
+            <div id="manager-instances-pane"><div class="env-list" id="manager-list"></div></div>
+            <div id="manager-templates-pane" hidden><div class="env-list" id="manager-templates-list"></div></div>
           </div>
         </div>
       </section>

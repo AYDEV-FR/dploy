@@ -1,7 +1,16 @@
 import { api } from './api';
 import { consumeHashToken, isAuthenticated, login, logout, setToken, usernameFromToken } from './auth';
 import type { Me, UIConfig } from './types';
-import { cancelRun, renderCatalog, renderEnvironments, renderManager, runFlow, wireEnvActions } from './views';
+import {
+  cancelRun,
+  refreshManagerTab,
+  renderCatalog,
+  renderEnvironments,
+  renderManager,
+  runFlow,
+  setManagerTab,
+  wireEnvActions,
+} from './views';
 
 type RouteName = 'home' | 'catalog' | 'manager' | 'run' | 'login';
 
@@ -150,7 +159,14 @@ function initInteractions(): void {
       renderEnvironments();
     } else if (target.closest('#btn-manager-refresh')) {
       e.preventDefault();
-      renderManager();
+      refreshManagerTab();
+    } else if (target.closest('.tabs .tab') as HTMLButtonElement | null) {
+      const btn = target.closest('.tabs .tab') as HTMLButtonElement;
+      const tab = btn.dataset.tab as 'instances' | 'templates' | undefined;
+      if (tab) {
+        e.preventDefault();
+        setManagerTab(tab);
+      }
     } else if (target.closest('#btn-theme')) {
       e.preventDefault();
       const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';

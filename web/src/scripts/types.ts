@@ -102,3 +102,25 @@ export interface AdminInstancesListResponse {
   instances: AdminInstanceRow[];
   count: number;
 }
+
+/** One row of `GET /api/admin/templates` — shaped like `kubectl get dploytemplate -o wide`. */
+export interface AdminTemplateRow {
+  name: string;
+  displayName: string;
+  method: string;
+  enabled: boolean;
+  visible: boolean;
+  poolSize: number;
+  available: number;
+  claimed: number;
+  chartType: string;
+  chartRepo: string;
+  chartRef: string;
+  revision: string;
+  createdAt: string;
+}
+
+export interface AdminTemplatesListResponse {
+  templates: AdminTemplateRow[];
+  count: number;
+}

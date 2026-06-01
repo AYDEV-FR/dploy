@@ -147,13 +147,16 @@ func main() {
 	api.Get("/me", meHandler.Get)
 
 	// Admin endpoints — gated by MANAGER_ENABLED + the admin claim/value pair.
-	// 404 when disabled, 403 to non-admin requesters.
-	api.Get("/admin/instances", func(c *fiber.Ctx) error {
+	// 404 when disabled, 403 to non-admin requesters. Shared manager-gate
+	// middleware so both routes get the same 404 behaviour off-feature.
+	managerGate := func(c *fiber.Ctx) error {
 		if !cfg.ManagerEnabled {
 			return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Error: "manager disabled"})
 		}
 		return c.Next()
-	}, auth.AdminMiddleware(cfg), adminHandler.ListAllInstances)
+	}
+	api.Get("/admin/instances", managerGate, auth.AdminMiddleware(cfg), adminHandler.ListAllInstances)
+	api.Get("/admin/templates", managerGate, auth.AdminMiddleware(cfg), adminHandler.ListAllTemplates)
 
 	// SPA fallback - serve React app for all unmatched routes
 	app.Get("/*", func(c *fiber.Ctx) error {

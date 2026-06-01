@@ -108,6 +108,31 @@ type AdminInstancesListResponse struct {
 	Count     int                `json:"count"`
 }
 
+// AdminTemplateRow is the per-row shape served by GET /api/admin/templates —
+// shaped like `kubectl get dploytemplate -o wide` for the Manager view. Pool
+// counters are zero for on-demand templates.
+type AdminTemplateRow struct {
+	Name        string `json:"name"`        // metadata.name
+	DisplayName string `json:"displayName"` // spec.displayName
+	Method      string `json:"method"`      // "on-demand" or "pool"
+	Enabled     bool   `json:"enabled"`     // spec.enabled
+	Visible     bool   `json:"visible"`     // resolved IsVisible (defaults true)
+	PoolSize    int    `json:"poolSize"`    // spec.pool.size, 0 for on-demand
+	Available   int    `json:"available"`   // status.poolAvailable
+	Claimed     int    `json:"claimed"`     // status.poolClaimed
+	ChartType   string `json:"chartType"`   // "git" or "helm"
+	ChartRepo   string `json:"chartRepo"`   // spec.chart.repoURL
+	ChartRef    string `json:"chartRef"`    // chart name (helm) or path (git)
+	Revision    string `json:"revision"`    // spec.chart.targetRevision
+	CreatedAt   string `json:"createdAt"`   // metadata.creationTimestamp, RFC3339
+}
+
+// AdminTemplatesListResponse is the envelope around AdminTemplateRow.
+type AdminTemplatesListResponse struct {
+	Templates []AdminTemplateRow `json:"templates"`
+	Count     int                `json:"count"`
+}
+
 type HealthResponse struct {
 	Status string `json:"status"`
 }
