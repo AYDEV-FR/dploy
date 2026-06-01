@@ -120,6 +120,31 @@ async function onEnvAction(action: string, name: string): Promise<void> {
 
 /* ---------- Manager (admin) ---------- */
 
+/** Active tab in the Manager view. State is module-local — refresh re-renders the current one. */
+let managerTab: 'instances' | 'templates' = 'instances';
+
+/** Switch the Manager tab. Re-renders only the selected pane. */
+export async function setManagerTab(tab: 'instances' | 'templates'): Promise<void> {
+  managerTab = tab;
+  const ip = $('#manager-instances-pane');
+  const tp = $('#manager-templates-pane');
+  if (ip) ip.hidden = tab !== 'instances';
+  if (tp) tp.hidden = tab !== 'templates';
+  document.querySelectorAll<HTMLButtonElement>('.tabs .tab').forEach((b) => {
+    const active = b.dataset.tab === tab;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  await refreshManagerTab();
+}
+
+/** Refresh the currently-active Manager tab. Called by the refresh button. */
+export async function refreshManagerTab(): Promise<void> {
+  if (managerTab === 'templates') return renderManagerTemplates();
+  return renderManager();
+}
+
+
 /** Compact, kubectl-style "since createdAt" age (e.g. "3h12m", "2d", "47s"). */
 function ageSince(iso: string): string {
   if (!iso) return '—';
@@ -188,6 +213,67 @@ export async function renderManager(): Promise<void> {
                   <td><span title="${esc(r.createdAt)}">${esc(ageSince(r.createdAt))}</span></td>
                   <td>${r.namespace ? `<code>${esc(r.namespace)}</code>` : '<span class="muted">—</span>'}</td>
                   <td>${r.uuid ? `<code>${esc(r.uuid)}</code>` : '<span class="muted">—</span>'}</td>
+                </tr>`;
+              })
+              .join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch (err) {
+    list.innerHTML = `<div class="state error">${esc((err as Error).message)}</div>`;
+  }
+}
+
+export async function renderManagerTemplates(): Promise<void> {
+  const list = $('#manager-templates-list');
+  const counter = $('#manager-counter');
+  if (!list) return;
+  list.innerHTML = '<div class="state">Loading…</div>';
+
+  try {
+    const data = await api.getAllTemplates();
+    const rows = data.templates || [];
+    if (counter) counter.innerHTML = `<b>${rows.length}</b><span>templates</span>`;
+
+    if (rows.length === 0) {
+      list.innerHTML = '<div class="state">No templates defined.</div>';
+      return;
+    }
+    list.innerHTML = `
+      <div class="kube-table-wrap">
+        <table class="kube-table">
+          <thead>
+            <tr>
+              <th>NAME</th>
+              <th>DISPLAY NAME</th>
+              <th>METHOD</th>
+              <th>ENABLED</th>
+              <th>POOL</th>
+              <th>CHART</th>
+              <th>REVISION</th>
+              <th>AGE</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows
+              .map((r) => {
+                const poolCell =
+                  r.method === 'pool'
+                    ? `<span title="size/available/claimed"><b>${r.available}</b>/${r.poolSize} avail · ${r.claimed} claimed</span>`
+                    : '<span class="muted">—</span>';
+                const enabled = r.enabled
+                  ? '<span class="status healthy">true</span>'
+                  : '<span class="status degraded">false</span>';
+                const chart = `<code>${esc(r.chartType || 'helm')}:${esc(r.chartRef || '—')}</code><br><span class="muted" style="font-size:0.78rem">${esc(r.chartRepo)}</span>`;
+                return `<tr>
+                  <td><code>${esc(r.name)}</code>${r.visible ? '' : ' <span class="muted" title="hidden from catalog">(hidden)</span>'}</td>
+                  <td>${esc(r.displayName || '—')}</td>
+                  <td>${esc(r.method)}</td>
+                  <td>${enabled}</td>
+                  <td>${poolCell}</td>
+                  <td>${chart}</td>
+                  <td>${esc(r.revision || '—')}</td>
+                  <td><span title="${esc(r.createdAt)}">${esc(ageSince(r.createdAt))}</span></td>
                 </tr>`;
               })
               .join('')}

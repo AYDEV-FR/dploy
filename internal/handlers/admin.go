@@ -60,3 +60,52 @@ func (h *AdminHandler) ListAllInstances(c *fiber.Ctx) error {
 		Count:     len(out),
 	})
 }
+
+// ListAllTemplates answers `GET /api/admin/templates`: every DployTemplate
+// (visible and hidden, enabled and disabled) shaped like
+// `kubectl get dploytemplate -o wide` for the Manager UI.
+func (h *AdminHandler) ListAllTemplates(c *fiber.Ctx) error {
+	templates, err := h.kubeClient.ListTemplates(c.Context())
+	if err != nil {
+		return internalError(c, err)
+	}
+	sort.Slice(templates, func(i, j int) bool {
+		return templates[i].Name < templates[j].Name
+	})
+
+	out := make([]models.AdminTemplateRow, 0, len(templates))
+	for i := range templates {
+		t := &templates[i]
+		method := string(t.Spec.Method)
+		if method == "" {
+			method = "on-demand"
+		}
+		// Chart ref differs by source type: helm uses .Chart, git uses .Path.
+		ref := t.Spec.Chart.Chart
+		if t.Spec.Chart.Type == "git" || ref == "" {
+			ref = t.Spec.Chart.Path
+		}
+		row := models.AdminTemplateRow{
+			Name:        t.Name,
+			DisplayName: t.Spec.DisplayName,
+			Method:      method,
+			Enabled:     t.Spec.Enabled,
+			Visible:     t.IsVisible(),
+			Available:   t.Status.PoolAvailable,
+			Claimed:     t.Status.PoolClaimed,
+			ChartType:   string(t.Spec.Chart.Type),
+			ChartRepo:   t.Spec.Chart.RepoURL,
+			ChartRef:    ref,
+			Revision:    t.Spec.Chart.TargetRevision,
+			CreatedAt:   t.CreationTimestamp.UTC().Format(time.RFC3339),
+		}
+		if t.Spec.Pool != nil {
+			row.PoolSize = t.Spec.Pool.Size
+		}
+		out = append(out, row)
+	}
+	return c.JSON(models.AdminTemplatesListResponse{
+		Templates: out,
+		Count:     len(out),
+	})
+}
