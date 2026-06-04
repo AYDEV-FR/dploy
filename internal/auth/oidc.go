@@ -4,9 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -14,125 +12,109 @@ import (
 
 	"github.com/AYDEV-FR/dploy/internal/config"
 	"github.com/AYDEV-FR/dploy/internal/logger"
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gofiber/fiber/v2"
+	"golang.org/x/oauth2"
 )
 
-// OIDCDiscovery represents the OIDC discovery document.
-type OIDCDiscovery struct {
-	Issuer                string `json:"issuer"`
-	AuthorizationEndpoint string `json:"authorization_endpoint"`
-	TokenEndpoint         string `json:"token_endpoint"`
-	UserInfoEndpoint      string `json:"userinfo_endpoint"`
-	JwksURI               string `json:"jwks_uri"`
-	EndSessionEndpoint    string `json:"end_session_endpoint"`
-}
-
-// StateData holds OIDC state information for CSRF protection.
+// StateData holds a one-time state token's expiry + the URL to redirect back
+// to after a successful callback. In-memory map keyed by state; lost on pod
+// restart (in-flight logins fail back to /auth/login).
 type StateData struct {
 	Expiry    time.Time
 	ReturnURL string
 }
 
-// OIDCHandler handles OIDC authentication flow.
+// OIDCHandler runs the OAuth2 / OIDC Authorization Code flow with the
+// configured IdP. Heavy lifting is delegated to golang.org/x/oauth2 (Code
+// exchange, AuthCodeURL) and github.com/coreos/go-oidc (discovery). The only
+// dploy-specific bits are split-horizon endpoint handling, a one-shot state
+// map for CSRF protection, and the post-callback hash-fragment redirect.
 type OIDCHandler struct {
-	config          *config.Config
-	states          map[string]*StateData
-	statesMutex     sync.RWMutex
-	discovery       *OIDCDiscovery
-	publicDiscovery *OIDCDiscovery // For browser redirects (may use different URLs)
+	config       *config.Config
+	oauth2Config *oauth2.Config
+
+	statesMu sync.RWMutex
+	states   map[string]*StateData
 }
 
-// OIDCTokenResponse represents the token response from the OIDC provider.
-type OIDCTokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	TokenType    string `json:"token_type"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
-	IDToken      string `json:"id_token"`
-}
+const (
+	stateTTL          = 10 * time.Minute
+	stateCleanupEvery = 5 * time.Minute
+	discoveryTimeout  = 10 * time.Second
+	discoveryAttempts = 5
+)
 
-// NewOIDCHandler creates a new OIDC handler using OIDC discovery.
+// NewOIDCHandler discovers the IdP endpoints, wires an oauth2.Config and
+// starts the state-cleanup goroutine. Returns an error only if discovery
+// keeps failing after the retry budget — boot-time network races are the
+// usual reason and 5 attempts with exponential backoff covers them in
+// practice.
 func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
-	handler := &OIDCHandler{
-		config: cfg,
-		states: make(map[string]*StateData),
+	// Split-horizon: tokens carry the public issuer URL (what the browser
+	// sees), but we discover and call the IdP through the in-cluster URL.
+	// InsecureIssuerURLContext tells go-oidc which issuer to expect.
+	ctx := context.Background()
+	if cfg.OIDCPublicIssuer != "" && cfg.OIDCPublicIssuer != cfg.OIDCIssuer {
+		ctx = oidc.InsecureIssuerURLContext(ctx, cfg.OIDCPublicIssuer)
 	}
 
-	// Discover OIDC endpoints from internal issuer (for backend calls).
-	discovery, err := handler.discoverOIDCWithRetry(cfg.OIDCIssuer)
+	provider, err := discoverWithRetry(ctx, cfg.OIDCIssuer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover OIDC endpoints from %s: %w", cfg.OIDCIssuer, err)
 	}
-	handler.discovery = discovery
-	logger.Info("OIDC discovery completed (internal)", "tokenEndpoint", discovery.TokenEndpoint)
+	logger.Info("OIDC discovery completed", "issuer", cfg.OIDCIssuer)
 
-	// If public issuer is different, create public discovery by replacing the server base URL.
-	// This handles cases where the pod can't access the public URL directly.
+	// Browser redirects must hit the *public* authorization endpoint; backend
+	// code exchange stays on the *internal* token endpoint. Discovery gave us
+	// both with internal URLs — substitute the public base on AuthURL.
+	endpoint := provider.Endpoint()
+	authURL := endpoint.AuthURL
 	if cfg.OIDCPublicIssuer != "" && cfg.OIDCPublicIssuer != cfg.OIDCIssuer {
-		// Try to discover from public issuer first.
-		publicDiscovery, err := handler.discoverOIDCWithRetry(cfg.OIDCPublicIssuer)
-		if err != nil {
-			// Extract base URLs (scheme + host) for replacement.
-			internalBase := extractBaseURL(cfg.OIDCIssuer)
-			publicBase := extractBaseURL(cfg.OIDCPublicIssuer)
-
-			// Construct public URLs by replacing internal base with public base.
-			logger.Warn("Failed to discover OIDC from public issuer, constructing URLs from internal discovery",
-				"publicIssuer", cfg.OIDCPublicIssuer,
-				"error", err,
-				"internalBase", internalBase,
-				"publicBase", publicBase)
-			handler.publicDiscovery = &OIDCDiscovery{
-				Issuer:                strings.Replace(discovery.Issuer, internalBase, publicBase, 1),
-				AuthorizationEndpoint: strings.Replace(discovery.AuthorizationEndpoint, internalBase, publicBase, 1),
-				TokenEndpoint:         strings.Replace(discovery.TokenEndpoint, internalBase, publicBase, 1),
-				UserInfoEndpoint:      strings.Replace(discovery.UserInfoEndpoint, internalBase, publicBase, 1),
-				JwksURI:               strings.Replace(discovery.JwksURI, internalBase, publicBase, 1),
-				EndSessionEndpoint:    strings.Replace(discovery.EndSessionEndpoint, internalBase, publicBase, 1),
-			}
-			logger.Info("OIDC discovery completed (public, constructed)", "authEndpoint", handler.publicDiscovery.AuthorizationEndpoint)
-		} else {
-			handler.publicDiscovery = publicDiscovery
-			logger.Info("OIDC discovery completed (public)", "authEndpoint", publicDiscovery.AuthorizationEndpoint)
-		}
-	} else {
-		handler.publicDiscovery = discovery
+		internalBase := extractBaseURL(cfg.OIDCIssuer)
+		publicBase := extractBaseURL(cfg.OIDCPublicIssuer)
+		authURL = strings.Replace(endpoint.AuthURL, internalBase, publicBase, 1)
+		logger.Info("OIDC auth endpoint rebased to public",
+			"internal", internalBase, "public", publicBase, "authURL", authURL)
 	}
 
-	// Start cleanup goroutine for expired states.
-	go handler.cleanupStates()
-
-	return handler, nil
-}
-
-// extractBaseURL extracts the scheme and host from a URL (e.g., "http://example.com/path" -> "http://example.com").
-func extractBaseURL(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
+	h := &OIDCHandler{
+		config: cfg,
+		oauth2Config: &oauth2.Config{
+			ClientID:     cfg.OIDCClientID,
+			ClientSecret: cfg.OIDCClientSecret,
+			RedirectURL:  cfg.OIDCRedirectURL,
+			Scopes:       []string{oidc.ScopeOpenID, "email", "profile"},
+			Endpoint: oauth2.Endpoint{
+				AuthURL:  authURL,            // public — browser redirects here
+				TokenURL: endpoint.TokenURL,  // internal — backend POSTs here
+			},
+		},
+		states: make(map[string]*StateData),
 	}
-	return fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
+	go h.cleanupStates()
+	return h, nil
 }
 
-// discoverOIDCWithRetry calls discoverOIDC with exponential backoff to ride out
-// transient startup conditions — typically a brief window after pod start where
-// the network identity is not yet propagated (Cilium et al.) and DNS / egress
-// returns EPERM. Most failures resolve within a few seconds; if discovery still
-// fails after the budget, the last error is returned.
-func (h *OIDCHandler) discoverOIDCWithRetry(issuer string) (*OIDCDiscovery, error) {
-	const attempts = 5
+// discoverWithRetry rides out the post-startup network-identity window
+// (Cilium et al.) where DNS / egress briefly returns EPERM. Same shape as the
+// pre-refactor discoverOIDCWithRetry: 5 attempts, exponential backoff capped
+// at 4 s.
+func discoverWithRetry(ctx context.Context, issuer string) (*oidc.Provider, error) {
 	delay := 500 * time.Millisecond
 	var lastErr error
-	for i := 1; i <= attempts; i++ {
-		d, err := h.discoverOIDC(issuer)
+	for i := 1; i <= discoveryAttempts; i++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
+		provider, err := oidc.NewProvider(attemptCtx, issuer)
+		cancel()
 		if err == nil {
 			if i > 1 {
 				logger.Info("OIDC discovery succeeded after retries", "issuer", issuer, "attempts", i)
 			}
-			return d, nil
+			return provider, nil
 		}
 		lastErr = err
-		if i == attempts {
+		if i == discoveryAttempts {
 			break
 		}
 		logger.Info("OIDC discovery attempt failed, retrying",
@@ -145,242 +127,126 @@ func (h *OIDCHandler) discoverOIDCWithRetry(issuer string) (*OIDCDiscovery, erro
 	return nil, lastErr
 }
 
-// discoverOIDC fetches the OIDC discovery document from the issuer.
-func (h *OIDCHandler) discoverOIDC(issuer string) (*OIDCDiscovery, error) {
-	// Standard OIDC discovery URL.
-	discoveryURL := strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", discoveryURL, nil)
+// extractBaseURL keeps only scheme + host (no path), so a public issuer with a
+// trailing path component still substitutes cleanly.
+func extractBaseURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, err
+		return rawURL
 	}
+	return fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
+}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
+// generateState mints a fresh 32-byte CSRF token and stashes the returnURL
+// alongside it for the callback to pick up.
+func (h *OIDCHandler) generateState(returnURL string) string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failure is exceedingly rare; fall back to a time-based
+		// state rather than panicking. Lower entropy but still single-use.
+		b = []byte(fmt.Sprintf("dploy-state-%d", time.Now().UnixNano()))
 	}
-	defer resp.Body.Close()
+	state := base64.URLEncoding.EncodeToString(b)
+	h.statesMu.Lock()
+	h.states[state] = &StateData{Expiry: time.Now().Add(stateTTL), ReturnURL: returnURL}
+	h.statesMu.Unlock()
+	return state
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("discovery endpoint returned status %d", resp.StatusCode)
+// consumeState looks up + deletes the state in one critical section.
+// Returns (data, true) on a valid first-use, (nil, false) on miss or expiry.
+func (h *OIDCHandler) consumeState(state string) (*StateData, bool) {
+	h.statesMu.Lock()
+	defer h.statesMu.Unlock()
+	data, ok := h.states[state]
+	if !ok {
+		return nil, false
 	}
-
-	var discovery OIDCDiscovery
-	if err := json.NewDecoder(resp.Body).Decode(&discovery); err != nil {
-		return nil, fmt.Errorf("failed to decode discovery document: %w", err)
+	delete(h.states, state)
+	if time.Now().After(data.Expiry) {
+		return nil, false
 	}
-
-	return &discovery, nil
+	return data, true
 }
 
 func (h *OIDCHandler) cleanupStates() {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(stateCleanupEvery)
 	defer ticker.Stop()
-
 	for range ticker.C {
-		h.statesMutex.Lock()
+		h.statesMu.Lock()
 		now := time.Now()
 		for state, data := range h.states {
 			if now.After(data.Expiry) {
 				delete(h.states, state)
 			}
 		}
-		h.statesMutex.Unlock()
+		h.statesMu.Unlock()
 	}
 }
 
-func (h *OIDCHandler) generateState(returnURL string) string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		// Fallback to timestamp-based state if crypto/rand fails.
-		b = []byte(fmt.Sprintf("%d", time.Now().UnixNano()))
-	}
-	state := base64.URLEncoding.EncodeToString(b)
-
-	h.statesMutex.Lock()
-	h.states[state] = &StateData{
-		Expiry:    time.Now().Add(10 * time.Minute),
-		ReturnURL: returnURL,
-	}
-	h.statesMutex.Unlock()
-
-	return state
-}
-
-func (h *OIDCHandler) validateState(state string) (*StateData, bool) {
-	h.statesMutex.RLock()
-	data, exists := h.states[state]
-	h.statesMutex.RUnlock()
-
-	if !exists {
-		return nil, false
-	}
-
-	if time.Now().After(data.Expiry) {
-		h.statesMutex.Lock()
-		delete(h.states, state)
-		h.statesMutex.Unlock()
-		return nil, false
-	}
-
-	// Remove state after validation (one-time use).
-	h.statesMutex.Lock()
-	delete(h.states, state)
-	h.statesMutex.Unlock()
-
-	return data, true
-}
-
-// Login initiates the OIDC Authorization Code flow.
+// Login initiates the Authorization Code flow.
 func (h *OIDCHandler) Login(c *fiber.Ctx) error {
-	// Get returnUrl from query parameter (optional).
 	returnURL := c.Query("returnUrl", "/")
-
-	logger.Debug("OIDC login initiated",
-		"returnUrl", returnURL,
-		"fullURL", c.OriginalURL(),
-		"queryString", string(c.Request().URI().QueryString()))
-
-	// Validate returnUrl - must be a relative path starting with /
-	// This prevents open redirect vulnerabilities and invalid paths
+	// Open-redirect guard: only relative paths are accepted.
 	if !strings.HasPrefix(returnURL, "/") {
 		logger.Warn("OIDC login: invalid returnUrl, defaulting to /", "returnUrl", returnURL)
 		returnURL = "/"
 	}
-
 	state := h.generateState(returnURL)
-	logger.Debug("OIDC login: stored returnUrl with state", "returnUrl", returnURL)
-
-	params := url.Values{}
-	params.Set("client_id", h.config.OIDCClientID)
-	params.Set("redirect_uri", h.config.OIDCRedirectURL)
-	params.Set("response_type", "code")
-	params.Set("scope", "openid email profile")
-	params.Set("state", state)
-
-	// Use public discovery for browser redirects.
-	authURL := fmt.Sprintf("%s?%s", h.publicDiscovery.AuthorizationEndpoint, params.Encode())
-	return c.Redirect(authURL, fiber.StatusFound)
+	logger.Debug("OIDC login redirect", "returnUrl", returnURL)
+	return c.Redirect(h.oauth2Config.AuthCodeURL(state), fiber.StatusFound)
 }
 
-// Callback handles the OIDC callback after user authentication.
+// Callback exchanges the code for tokens and bounces the browser to the
+// stashed returnURL with the id_token in the URL hash (client-side only —
+// never appears in server logs).
 func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
+	if errorParam := c.Query("error"); errorParam != "" {
+		errorDesc := c.Query("error_description", errorParam)
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": errorDesc})
+	}
 	code := c.Query("code")
 	state := c.Query("state")
-	errorParam := c.Query("error")
-
-	if errorParam != "" {
-		errorDesc := c.Query("error_description", errorParam)
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": errorDesc,
-		})
-	}
-
 	if code == "" || state == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "missing code or state parameter",
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "missing code or state parameter"})
 	}
-
-	stateData, valid := h.validateState(state)
+	stateData, valid := h.consumeState(state)
 	if !valid {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid or expired state parameter",
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid or expired state parameter"})
 	}
 
-	// Exchange code for token.
-	token, err := h.exchangeCode(code)
+	token, err := h.oauth2Config.Exchange(c.Context(), code)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": fmt.Sprintf("failed to exchange code: %v", err),
 		})
 	}
 
-	// Use ID token if available (OIDC), otherwise fall back to access token.
-	tokenToUse := token.IDToken
+	// OIDC flows put the id_token in Token.Extra; OAuth2-only IdPs only return
+	// an access_token. We prefer the id_token (it's what the JWT validator
+	// downstream expects), fall back to the access_token otherwise.
+	tokenToUse, _ := token.Extra("id_token").(string)
 	if tokenToUse == "" {
 		tokenToUse = token.AccessToken
 	}
-
 	if tokenToUse == "" {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "no token received from OIDC provider",
 		})
 	}
 
-	// Get return URL from state (defaults to "/" if not specified).
 	returnURL := "/"
-	if stateData != nil && stateData.ReturnURL != "" {
+	if stateData != nil && strings.HasPrefix(stateData.ReturnURL, "/") {
 		returnURL = stateData.ReturnURL
-		logger.Debug("OIDC callback: retrieved returnURL from state", "returnUrl", returnURL)
-	} else {
-		logger.Debug("OIDC callback: no returnURL in state, using default /")
 	}
-
-	// Ensure returnURL is a valid absolute path (starts with /)
-	// This prevents redirect issues from corrupted state data
-	if !strings.HasPrefix(returnURL, "/") {
-		logger.Warn("OIDC callback: invalid returnURL, defaulting to /", "returnUrl", returnURL)
-		returnURL = "/"
-	}
-
-	// Redirect with token in hash fragment (client-side only, not sent to server).
-	// This is more secure than query params and prevents token leakage in server logs.
-	redirectURL := fmt.Sprintf("%s#token=%s", returnURL, tokenToUse)
-
-	logger.Debug("OIDC callback: redirecting with token", "returnUrl", returnURL, "tokenLength", len(tokenToUse))
-
-	return c.Redirect(redirectURL, fiber.StatusFound)
+	logger.Debug("OIDC callback complete", "returnUrl", returnURL, "tokenLength", len(tokenToUse))
+	return c.Redirect(fmt.Sprintf("%s#token=%s", returnURL, tokenToUse), fiber.StatusFound)
 }
 
-// Logout redirects to home (token is cleared client-side).
+// Logout currently just bounces the browser home — the SPA clears its
+// localStorage token on this redirect. End-session at the IdP is opt-in
+// (the previous version didn't do it either; add an EndSessionEndpoint
+// roundtrip here when an IdP demands SLO).
 func (h *OIDCHandler) Logout(c *fiber.Ctx) error {
 	return c.Redirect("/", fiber.StatusFound)
-}
-
-func (h *OIDCHandler) exchangeCode(code string) (*OIDCTokenResponse, error) {
-	data := url.Values{}
-	data.Set("grant_type", "authorization_code")
-	data.Set("code", code)
-	data.Set("redirect_uri", h.config.OIDCRedirectURL)
-	data.Set("client_id", h.config.OIDCClientID)
-	data.Set("client_secret", h.config.OIDCClientSecret)
-
-	req, err := http.NewRequestWithContext(
-		context.Background(),
-		"POST",
-		h.discovery.TokenEndpoint, // Use internal discovery for backend calls.
-		strings.NewReader(data.Encode()),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		// Try to read error details.
-		var errorBody map[string]interface{}
-		if err := json.NewDecoder(resp.Body).Decode(&errorBody); err != nil {
-			return nil, fmt.Errorf("token endpoint returned status %d", resp.StatusCode)
-		}
-		return nil, fmt.Errorf("token endpoint returned status %d: %v", resp.StatusCode, errorBody)
-	}
-
-	var tokenResp OIDCTokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return nil, fmt.Errorf("failed to decode token response: %w", err)
-	}
-
-	return &tokenResp, nil
 }
