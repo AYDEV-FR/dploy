@@ -99,6 +99,23 @@ func (v *JWTValidator) getJWKS() (*JWKS, error) {
 	return jwks, nil
 }
 
+// minJWKSRefreshInterval rate-limits the cache-miss refetch so a flood of
+// tokens with bogus kids can't DoS the IdP through this validator.
+const minJWKSRefreshInterval = 30 * time.Second
+
+// refreshJWKSOnCacheMiss forces a refetch when a token's kid isn't in the
+// cached set — covers the case where the IdP rotated a signing key inside the
+// 15-minute TTL. Rate-limited to avoid hammering the IdP under bogus traffic.
+func (v *JWTValidator) refreshJWKSOnCacheMiss() {
+	v.cacheMu.RLock()
+	tooSoon := time.Since(v.lastFetch) < minJWKSRefreshInterval
+	v.cacheMu.RUnlock()
+	if tooSoon {
+		return
+	}
+	_ = v.fetchJWKS()
+}
+
 //nolint:gocyclo // Complexity is necessary for proper JWT validation with multiple security checks
 func (v *JWTValidator) Validate(tokenString string) (string, map[string]any, error) {
 	logger.Debug("Validating JWT token")
@@ -122,16 +139,29 @@ func (v *JWTValidator) Validate(tokenString string) (string, map[string]any, err
 			return nil, fmt.Errorf("failed to get JWKS: %w", err)
 		}
 
-		var jwk *JWK
-		for _, k := range jwks.Keys {
-			if k.Kid == kid {
-				jwk = &k
-				break
+		findKey := func(set *JWKS) *JWK {
+			for i := range set.Keys {
+				if set.Keys[i].Kid == kid {
+					return &set.Keys[i]
+				}
+			}
+			return nil
+		}
+		jwk := findKey(jwks)
+
+		// Cache miss can mean the IdP rotated a signing key inside the TTL.
+		// Force a (rate-limited) refetch and retry once before giving up.
+		if jwk == nil {
+			v.refreshJWKSOnCacheMiss()
+			refreshed, refreshErr := v.getJWKS()
+			if refreshErr == nil && refreshed != nil {
+				jwks = refreshed
+				jwk = findKey(jwks)
 			}
 		}
 
 		if jwk == nil {
-			logger.Debug("Key not found in JWKS", "kid", kid, "keyCount", len(jwks.Keys))
+			logger.Debug("Key not found in JWKS after refresh", "kid", kid, "keyCount", len(jwks.Keys))
 			return nil, fmt.Errorf("key %s not found in JWKS (have %d keys)", kid, len(jwks.Keys))
 		}
 
