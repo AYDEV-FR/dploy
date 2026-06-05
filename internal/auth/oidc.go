@@ -2,27 +2,26 @@ package auth
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/AYDEV-FR/dploy/internal/config"
 	"github.com/AYDEV-FR/dploy/internal/logger"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gorilla/securecookie"
 	"golang.org/x/oauth2"
 )
 
-// StateData holds a one-time state token's expiry + the URL to redirect back
-// to after a successful callback. In-memory map keyed by state; lost on pod
-// restart (in-flight logins fail back to /auth/login).
-type StateData struct {
-	Expiry    time.Time
+// stateBlob is what we encode + sign into the OAuth2 `state` parameter.
+// Carrying the data inside the signed token keeps things stateless — no
+// server-side map, no cleanup goroutine — so the only failure mode left
+// is "browser took longer than stateTTL to come back", which is intended.
+type stateBlob struct {
 	ReturnURL string
+	Expiry    int64 // unix seconds
 }
 
 // OIDCHandler runs the OAuth2 / OIDC Authorization Code flow with the
@@ -33,14 +32,11 @@ type StateData struct {
 type OIDCHandler struct {
 	config       *config.Config
 	oauth2Config *oauth2.Config
-
-	statesMu sync.RWMutex
-	states   map[string]*StateData
+	sc           *securecookie.SecureCookie // signs+encodes the OAuth2 state blob
 }
 
 const (
 	stateTTL          = 10 * time.Minute
-	stateCleanupEvery = 5 * time.Minute
 	discoveryTimeout  = 10 * time.Second
 	discoveryAttempts = 5
 )
@@ -78,7 +74,13 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 			"internal", internalBase, "public", publicBase, "authURL", authURL)
 	}
 
-	h := &OIDCHandler{
+	// Keys are random per process: an in-flight login that straddles a pod
+	// restart fails closed (same as the in-memory map this replaces). Stable
+	// keys via env/secret would survive restarts — easy follow-up if needed.
+	sc := securecookie.New(securecookie.GenerateRandomKey(64), securecookie.GenerateRandomKey(32))
+	sc.MaxAge(int(stateTTL.Seconds()))
+
+	return &OIDCHandler{
 		config: cfg,
 		oauth2Config: &oauth2.Config{
 			ClientID:     cfg.OIDCClientID,
@@ -86,14 +88,12 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 			RedirectURL:  cfg.OIDCRedirectURL,
 			Scopes:       []string{oidc.ScopeOpenID, "email", "profile"},
 			Endpoint: oauth2.Endpoint{
-				AuthURL:  authURL,            // public — browser redirects here
-				TokenURL: endpoint.TokenURL,  // internal — backend POSTs here
+				AuthURL:  authURL,           // public — browser redirects here
+				TokenURL: endpoint.TokenURL, // internal — backend POSTs here
 			},
 		},
-		states: make(map[string]*StateData),
-	}
-	go h.cleanupStates()
-	return h, nil
+		sc: sc,
+	}, nil
 }
 
 // discoverWithRetry rides out the post-startup network-identity window
@@ -137,51 +137,30 @@ func extractBaseURL(rawURL string) string {
 	return fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
 }
 
-// generateState mints a fresh 32-byte CSRF token and stashes the returnURL
-// alongside it for the callback to pick up.
-func (h *OIDCHandler) generateState(returnURL string) string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		// crypto/rand failure is exceedingly rare; fall back to a time-based
-		// state rather than panicking. Lower entropy but still single-use.
-		b = []byte(fmt.Sprintf("dploy-state-%d", time.Now().UnixNano()))
-	}
-	state := base64.URLEncoding.EncodeToString(b)
-	h.statesMu.Lock()
-	h.states[state] = &StateData{Expiry: time.Now().Add(stateTTL), ReturnURL: returnURL}
-	h.statesMu.Unlock()
-	return state
+// generateState signs the (returnURL, expiry) blob into a self-contained
+// OAuth2 state parameter. The signing key is process-random — an attacker
+// can't forge a valid blob, so the CSRF guarantee holds without any
+// server-side bookkeeping.
+func (h *OIDCHandler) generateState(returnURL string) (string, error) {
+	return h.sc.Encode("dploy-state", stateBlob{
+		ReturnURL: returnURL,
+		Expiry:    time.Now().Add(stateTTL).Unix(),
+	})
 }
 
-// consumeState looks up + deletes the state in one critical section.
-// Returns (data, true) on a valid first-use, (nil, false) on miss or expiry.
-func (h *OIDCHandler) consumeState(state string) (*StateData, bool) {
-	h.statesMu.Lock()
-	defer h.statesMu.Unlock()
-	data, ok := h.states[state]
-	if !ok {
+// consumeState verifies the signature, decodes the blob and checks the
+// embedded expiry. Replay within the TTL is theoretically possible (no
+// nonce store), but mitigated by the IdP's own one-time-code semantics
+// and the short TTL — acceptable for the threat model.
+func (h *OIDCHandler) consumeState(state string) (*stateBlob, bool) {
+	var blob stateBlob
+	if err := h.sc.Decode("dploy-state", state, &blob); err != nil {
 		return nil, false
 	}
-	delete(h.states, state)
-	if time.Now().After(data.Expiry) {
+	if time.Now().Unix() > blob.Expiry {
 		return nil, false
 	}
-	return data, true
-}
-
-func (h *OIDCHandler) cleanupStates() {
-	ticker := time.NewTicker(stateCleanupEvery)
-	defer ticker.Stop()
-	for range ticker.C {
-		h.statesMu.Lock()
-		now := time.Now()
-		for state, data := range h.states {
-			if now.After(data.Expiry) {
-				delete(h.states, state)
-			}
-		}
-		h.statesMu.Unlock()
-	}
+	return &blob, true
 }
 
 // Login initiates the Authorization Code flow.
@@ -192,7 +171,10 @@ func (h *OIDCHandler) Login(c *fiber.Ctx) error {
 		logger.Warn("OIDC login: invalid returnUrl, defaulting to /", "returnUrl", returnURL)
 		returnURL = "/"
 	}
-	state := h.generateState(returnURL)
+	state, err := h.generateState(returnURL)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to mint state"})
+	}
 	logger.Debug("OIDC login redirect", "returnUrl", returnURL)
 	return c.Redirect(h.oauth2Config.AuthCodeURL(state), fiber.StatusFound)
 }
