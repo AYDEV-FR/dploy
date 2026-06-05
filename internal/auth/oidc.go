@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"strings"
@@ -19,9 +21,27 @@ import (
 // Carrying the data inside the signed token keeps things stateless — no
 // server-side map, no cleanup goroutine — so the only failure mode left
 // is "browser took longer than stateTTL to come back", which is intended.
+//
+// Nonce binds the returned id_token to this specific login attempt (OIDC
+// replay defense); PKCEVerifier proves to the IdP that the client redeeming
+// the code is the same one that started the flow (defense against an
+// intercepted auth code).
 type stateBlob struct {
-	ReturnURL string
-	Expiry    int64 // unix seconds
+	ReturnURL    string
+	Nonce        string
+	PKCEVerifier string
+	Expiry       int64 // unix seconds
+}
+
+// safeRelativePath enforces "/path[?...][#...]" — no scheme, no host, no
+// protocol-relative "//host/..." trick. `url.Parse` does the heavy lifting,
+// we just inspect the result.
+func safeRelativePath(s string) bool {
+	if !strings.HasPrefix(s, "/") || strings.HasPrefix(s, "//") || strings.HasPrefix(s, "/\\") {
+		return false
+	}
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "" && u.Host == "" && u.User == nil
 }
 
 // OIDCHandler runs the OAuth2 / OIDC Authorization Code flow with the
@@ -32,6 +52,7 @@ type stateBlob struct {
 type OIDCHandler struct {
 	config       *config.Config
 	oauth2Config *oauth2.Config
+	idVerifier   *oidc.IDTokenVerifier      // verifies id_tokens at /auth/callback
 	sc           *securecookie.SecureCookie // signs+encodes the OAuth2 state blob
 }
 
@@ -80,6 +101,12 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 	sc := securecookie.New(securecookie.GenerateRandomKey(64), securecookie.GenerateRandomKey(32))
 	sc.MaxAge(int(stateTTL.Seconds()))
 
+	// Reuse the provider's KeySet for callback-time id_token verification.
+	// Same JWKS + same expected issuer as the request-time JWT validator;
+	// catches forged / unsigned id_tokens here instead of trusting them all
+	// the way down to the first API call.
+	idVerifier := provider.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID})
+
 	return &OIDCHandler{
 		config: cfg,
 		oauth2Config: &oauth2.Config{
@@ -92,7 +119,8 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 				TokenURL: endpoint.TokenURL, // internal — backend POSTs here
 			},
 		},
-		sc: sc,
+		idVerifier: idVerifier,
+		sc:         sc,
 	}, nil
 }
 
@@ -137,14 +165,16 @@ func extractBaseURL(rawURL string) string {
 	return fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
 }
 
-// generateState signs the (returnURL, expiry) blob into a self-contained
-// OAuth2 state parameter. The signing key is process-random — an attacker
-// can't forge a valid blob, so the CSRF guarantee holds without any
-// server-side bookkeeping.
-func (h *OIDCHandler) generateState(returnURL string) (string, error) {
+// generateState signs the full blob (returnURL, nonce, PKCE verifier, expiry)
+// into a self-contained OAuth2 state parameter. The signing key is
+// process-random — an attacker can't forge a valid blob, so the CSRF
+// guarantee holds without any server-side bookkeeping.
+func (h *OIDCHandler) generateState(returnURL, nonce, pkceVerifier string) (string, error) {
 	return h.sc.Encode("dploy-state", stateBlob{
-		ReturnURL: returnURL,
-		Expiry:    time.Now().Add(stateTTL).Unix(),
+		ReturnURL:    returnURL,
+		Nonce:        nonce,
+		PKCEVerifier: pkceVerifier,
+		Expiry:       time.Now().Add(stateTTL).Unix(),
 	})
 }
 
@@ -163,20 +193,47 @@ func (h *OIDCHandler) consumeState(state string) (*stateBlob, bool) {
 	return &blob, true
 }
 
-// Login initiates the Authorization Code flow.
+// Login initiates the Authorization Code flow with state + nonce + PKCE.
+// Defense layering:
+//   - state    — CSRF + carries the (signed) returnURL across the flow
+//   - nonce    — binds the returned id_token to *this* login attempt
+//   - PKCE S256 — proves at token-exchange time that we're the same client
+//     that initiated the flow (defense against an intercepted auth code)
+//
+// returnURL is hardened against the protocol-relative open redirect
+// (`//evil.com/x` would otherwise sail past a naive HasPrefix("/") check).
 func (h *OIDCHandler) Login(c *fiber.Ctx) error {
 	returnURL := c.Query("returnUrl", "/")
-	// Open-redirect guard: only relative paths are accepted.
-	if !strings.HasPrefix(returnURL, "/") {
-		logger.Warn("OIDC login: invalid returnUrl, defaulting to /", "returnUrl", returnURL)
+	if !safeRelativePath(returnURL) {
+		logger.Warn("OIDC login: rejected unsafe returnUrl, defaulting to /", "returnUrl", returnURL)
 		returnURL = "/"
 	}
-	state, err := h.generateState(returnURL)
+	nonce, err := randomToken()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to mint nonce"})
+	}
+	pkceVerifier := oauth2.GenerateVerifier()
+	state, err := h.generateState(returnURL, nonce, pkceVerifier)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to mint state"})
 	}
+	authURL := h.oauth2Config.AuthCodeURL(state,
+		oidc.Nonce(nonce),
+		oauth2.S256ChallengeOption(pkceVerifier),
+	)
 	logger.Debug("OIDC login redirect", "returnUrl", returnURL)
-	return c.Redirect(h.oauth2Config.AuthCodeURL(state), fiber.StatusFound)
+	return c.Redirect(authURL, fiber.StatusFound)
+}
+
+// randomToken returns a 32-byte URL-safe random string suitable for use as
+// an OIDC nonce. crypto/rand is the source of truth — fall over loudly if
+// the kernel can't provide entropy rather than degrade to a guessable value.
+func randomToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("crypto/rand: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 // Callback exchanges the code for tokens and bounces the browser to the
@@ -197,32 +254,46 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid or expired state parameter"})
 	}
 
-	token, err := h.oauth2Config.Exchange(c.Context(), code)
+	// Exchange the code with the PKCE verifier — the IdP rejects the call if
+	// it doesn't match the challenge we sent at Login.
+	token, err := h.oauth2Config.Exchange(c.Context(), code, oauth2.VerifierOption(stateData.PKCEVerifier))
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": fmt.Sprintf("failed to exchange code: %v", err),
 		})
 	}
 
-	// OIDC flows put the id_token in Token.Extra; OAuth2-only IdPs only return
-	// an access_token. We prefer the id_token (it's what the JWT validator
-	// downstream expects), fall back to the access_token otherwise.
-	tokenToUse, _ := token.Extra("id_token").(string)
-	if tokenToUse == "" {
-		tokenToUse = token.AccessToken
-	}
-	if tokenToUse == "" {
+	rawIDToken, _ := token.Extra("id_token").(string)
+	if rawIDToken == "" {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "no token received from OIDC provider",
+			"error": "no id_token in OIDC response",
 		})
 	}
 
+	// Verify the id_token server-side (signature, iss, aud, exp, nbf, at_hash)
+	// before handing it to the browser. Catches forged / unsigned id_tokens
+	// here instead of trusting them as far as the next API call.
+	idToken, err := h.idVerifier.Verify(c.Context(), rawIDToken)
+	if err != nil {
+		logger.Warn("OIDC callback: id_token verification failed", "error", err.Error())
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "id_token verification failed",
+		})
+	}
+	// Replay defense: the nonce in the returned id_token must equal the one
+	// we baked into the (signed) state. Without this, an attacker who steals
+	// any valid id_token for our client_id can replay it through callback.
+	if idToken.Nonce != stateData.Nonce {
+		logger.Warn("OIDC callback: nonce mismatch — replay rejected")
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "nonce mismatch"})
+	}
+
 	returnURL := "/"
-	if stateData != nil && strings.HasPrefix(stateData.ReturnURL, "/") {
+	if safeRelativePath(stateData.ReturnURL) {
 		returnURL = stateData.ReturnURL
 	}
-	logger.Debug("OIDC callback complete", "returnUrl", returnURL, "tokenLength", len(tokenToUse))
-	return c.Redirect(fmt.Sprintf("%s#token=%s", returnURL, tokenToUse), fiber.StatusFound)
+	logger.Debug("OIDC callback complete", "returnUrl", returnURL, "tokenLength", len(rawIDToken))
+	return c.Redirect(fmt.Sprintf("%s#token=%s", returnURL, rawIDToken), fiber.StatusFound)
 }
 
 // Logout currently just bounces the browser home — the SPA clears its
