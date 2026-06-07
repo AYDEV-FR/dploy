@@ -270,9 +270,9 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 		})
 	}
 
-	// Verify the id_token server-side (signature, iss, aud, exp, nbf, at_hash)
-	// before handing it to the browser. Catches forged / unsigned id_tokens
-	// here instead of trusting them as far as the next API call.
+	// Verify the id_token server-side (signature, iss, aud, exp, nbf) before
+	// handing it to the browser. Catches forged / unsigned id_tokens here
+	// instead of trusting them as far as the next API call.
 	idToken, err := h.idVerifier.Verify(c.Context(), rawIDToken)
 	if err != nil {
 		logger.Warn("OIDC callback: id_token verification failed", "error", err.Error())
@@ -287,13 +287,39 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 		logger.Warn("OIDC callback: nonce mismatch — replay rejected")
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "nonce mismatch"})
 	}
+	// at_hash binding: when the IdP set it (Dex does for the code flow),
+	// confirm the id_token we just verified was issued together with this
+	// access_token. Defends against pairing a stolen access_token with a
+	// forged id_token. Optional in the spec, so we skip — with a warn — when
+	// the claim is absent.
+	if idToken.AccessTokenHash != "" {
+		if err := idToken.VerifyAccessToken(token.AccessToken); err != nil {
+			logger.Warn("OIDC callback: at_hash mismatch — token-pairing rejected", "error", err.Error())
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "at_hash mismatch"})
+		}
+	} else {
+		logger.Warn("OIDC callback: id_token has no at_hash, skipping access-token binding check")
+	}
 
 	returnURL := "/"
 	if safeRelativePath(stateData.ReturnURL) {
 		returnURL = stateData.ReturnURL
 	}
+	// Strip any fragment the user smuggled in via returnUrl (e.g. "/foo#section"):
+	// the SPA's consumeHashToken() expects "#token=..." to be the only hash
+	// on the final URL. Without this strip we'd produce "/foo#section#token=...",
+	// which the SPA fails to parse.
+	returnURL = stripFragment(returnURL)
 	logger.Debug("OIDC callback complete", "returnUrl", returnURL, "tokenLength", len(rawIDToken))
 	return c.Redirect(fmt.Sprintf("%s#token=%s", returnURL, rawIDToken), fiber.StatusFound)
+}
+
+// stripFragment returns the input URL without its #fragment, if any. Used at
+// the callback to make sure the only hash on the final SPA redirect URL is
+// the one carrying the token.
+func stripFragment(s string) string {
+	before, _, _ := strings.Cut(s, "#")
+	return before
 }
 
 // Logout currently just bounces the browser home — the SPA clears its
