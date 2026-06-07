@@ -69,8 +69,19 @@ auth:
   jwtUsernameClaim: preferred_username
   oidcClientID: dploy
   oidcClientSecret: ""
+
+  # oidcIssuer is the URL the API uses for discovery, token exchange and
+  # JWKS — typically the in-cluster Service URL in a Kubernetes deployment.
   oidcIssuer: ""
+
+  # oidcPublicIssuer is OPTIONAL — only set it for split-horizon deployments
+  # where the IdP is reached via two distinct URLs: an in-cluster one for
+  # backend traffic (oidcIssuer above) and a public one served via the
+  # ingress/gateway for browser redirects. When equal to oidcIssuer (or
+  # empty), the API uses a single URL for everything and the split-horizon
+  # code path is a no-op.
   oidcPublicIssuer: ""
+
   oidcRedirectURL: ""
 
   # Cookie keys for the zitadel/oidc state + PKCE cookies. Leave empty for
