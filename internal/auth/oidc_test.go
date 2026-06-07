@@ -2,6 +2,23 @@ package auth
 
 import "testing"
 
+func TestStripFragment(t *testing.T) {
+	for _, tc := range []struct {
+		in, want string
+	}{
+		{"/foo", "/foo"},
+		{"/foo?x=1", "/foo?x=1"},
+		{"/foo#frag", "/foo"},
+		{"/foo?x=1#frag", "/foo?x=1"},
+		{"#frag", ""},
+		{"", ""},
+	} {
+		if got := stripFragment(tc.in); got != tc.want {
+			t.Errorf("stripFragment(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // TestSafeRelativePath covers the open-redirect surface a CTF participant is
 // likely to probe through ?returnUrl=. Anything that isn't a plain
 // "/path[?…][#…]" must be rejected before it reaches c.Redirect, where the
