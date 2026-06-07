@@ -33,15 +33,28 @@ type stateBlob struct {
 	Expiry       int64 // unix seconds
 }
 
-// safeRelativePath enforces "/path[?...][#...]" — no scheme, no host, no
-// protocol-relative "//host/..." trick. `url.Parse` does the heavy lifting,
-// we just inspect the result.
-func safeRelativePath(s string) bool {
+// sanitizeRelativePath does two related jobs in one net/url pass:
+//
+//   - validates that s is a safe relative URL — no scheme, no host, no
+//     userinfo, no protocol-relative ("//host/...") or backslash trick
+//   - returns the canonical form with any user-supplied #fragment dropped,
+//     because the SPA's consumeHashToken() expects the final redirect's
+//     hash to be exclusively "#token=..." (a leftover "/foo#section" would
+//     produce "/foo#section#token=..." which it can't parse)
+//
+// Both concerns are pure net/url plumbing — no string fiddling beyond the
+// "//"/"/\\" prefix sniff that url.Parse can't catch (it parses them as
+// scheme-less but still cross-origin).
+func sanitizeRelativePath(s string) (string, bool) {
 	if !strings.HasPrefix(s, "/") || strings.HasPrefix(s, "//") || strings.HasPrefix(s, "/\\") {
-		return false
+		return "", false
 	}
 	u, err := url.Parse(s)
-	return err == nil && u.Scheme == "" && u.Host == "" && u.User == nil
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil {
+		return "", false
+	}
+	u.Fragment = ""
+	return u.String(), true
 }
 
 // OIDCHandler runs the OAuth2 / OIDC Authorization Code flow with the
@@ -203,10 +216,11 @@ func (h *OIDCHandler) consumeState(state string) (*stateBlob, bool) {
 // returnURL is hardened against the protocol-relative open redirect
 // (`//evil.com/x` would otherwise sail past a naive HasPrefix("/") check).
 func (h *OIDCHandler) Login(c *fiber.Ctx) error {
-	returnURL := c.Query("returnUrl", "/")
-	if !safeRelativePath(returnURL) {
-		logger.Warn("OIDC login: rejected unsafe returnUrl, defaulting to /", "returnUrl", returnURL)
-		returnURL = "/"
+	returnURL := "/"
+	if clean, ok := sanitizeRelativePath(c.Query("returnUrl", "/")); ok {
+		returnURL = clean
+	} else {
+		logger.Warn("OIDC login: rejected unsafe returnUrl, defaulting to /", "returnUrl", c.Query("returnUrl"))
 	}
 	nonce, err := randomToken()
 	if err != nil {
@@ -301,25 +315,15 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 		logger.Warn("OIDC callback: id_token has no at_hash, skipping access-token binding check")
 	}
 
+	// Re-sanitize on the way out: the blob was signed by us, but defense in
+	// depth is cheap and this is the last chance to drop any fragment that
+	// would otherwise produce a "/foo#frag#token=..." URL the SPA can't read.
 	returnURL := "/"
-	if safeRelativePath(stateData.ReturnURL) {
-		returnURL = stateData.ReturnURL
+	if clean, ok := sanitizeRelativePath(stateData.ReturnURL); ok {
+		returnURL = clean
 	}
-	// Strip any fragment the user smuggled in via returnUrl (e.g. "/foo#section"):
-	// the SPA's consumeHashToken() expects "#token=..." to be the only hash
-	// on the final URL. Without this strip we'd produce "/foo#section#token=...",
-	// which the SPA fails to parse.
-	returnURL = stripFragment(returnURL)
 	logger.Debug("OIDC callback complete", "returnUrl", returnURL, "tokenLength", len(rawIDToken))
 	return c.Redirect(fmt.Sprintf("%s#token=%s", returnURL, rawIDToken), fiber.StatusFound)
-}
-
-// stripFragment returns the input URL without its #fragment, if any. Used at
-// the callback to make sure the only hash on the final SPA redirect URL is
-// the one carrying the token.
-func stripFragment(s string) string {
-	before, _, _ := strings.Cut(s, "#")
-	return before
 }
 
 // Logout currently just bounces the browser home — the SPA clears its
