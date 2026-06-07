@@ -67,19 +67,24 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 	}
 	cookieHandler := httphelper.NewCookieHandler(hashKey, blockKey, cookieOpts...)
 
-	// Split-horizon: tokens carry the public issuer URL (Dex's configured
-	// issuer is fixed regardless of request host), but we discover and call
-	// the IdP through the in-cluster URL. zitadel/oidc validates that the
-	// discovery doc's `issuer` matches the arg we pass, so we pass the
-	// public one and override the fetch URL via WithCustomDiscoveryUrl.
+	// Optional split-horizon issuer support: when OIDCPublicIssuer is set and
+	// differs from OIDCIssuer, the IdP is reached via two URLs — the in-cluster
+	// one (low-latency for discovery/token/JWKS) and the public one (which is
+	// what tokens carry as `iss` and what browsers must redirect to). Most
+	// deployments expose the IdP on a single URL and can leave OIDCPublicIssuer
+	// empty; the block below + the AuthURL rebase further down are no-ops then.
 	expectedIssuer := cfg.OIDCIssuer
-	internalDiscoveryURL := strings.TrimSuffix(cfg.OIDCIssuer, "/") + "/.well-known/openid-configuration"
 	opts := []rp.Option{
 		rp.WithCookieHandler(cookieHandler),
 		rp.WithPKCE(cookieHandler),
 	}
 	if cfg.OIDCPublicIssuer != "" && cfg.OIDCPublicIssuer != cfg.OIDCIssuer {
+		// zitadel/oidc validates discovery.Issuer == arg.issuer. Pass the
+		// public one (what Dex advertises) and override the fetch URL to the
+		// internal one via WithCustomDiscoveryUrl so the pod doesn't have to
+		// resolve the public host at boot.
 		expectedIssuer = cfg.OIDCPublicIssuer
+		internalDiscoveryURL := strings.TrimSuffix(cfg.OIDCIssuer, "/") + "/.well-known/openid-configuration"
 		opts = append(opts, rp.WithCustomDiscoveryUrl(internalDiscoveryURL))
 	}
 
@@ -92,11 +97,12 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 		return nil, fmt.Errorf("failed to build OIDC RelyingParty: %w", err)
 	}
 
-	// Endpoints from discovery are derived by Dex from the request Host
-	// header — fetching discovery via the in-cluster URL gives us internal
-	// endpoint URLs. Backend code exchange + JWKS stay internal; only the
-	// AuthorizationEndpoint must be rebased to public so browsers land on
-	// the user-facing IdP URL.
+	// Second half of the optional split-horizon path. Dex derives the
+	// discovery doc's endpoint URLs from the request Host header, so fetching
+	// via the in-cluster URL gives us internal endpoints. Backend code
+	// exchange + JWKS stay internal (those are fine); only the
+	// AuthorizationEndpoint must be rebased to public so browsers actually
+	// land on the user-facing IdP URL.
 	if cfg.OIDCPublicIssuer != "" && cfg.OIDCPublicIssuer != cfg.OIDCIssuer {
 		internalBase := extractBaseURL(cfg.OIDCIssuer)
 		publicBase := extractBaseURL(cfg.OIDCPublicIssuer)
