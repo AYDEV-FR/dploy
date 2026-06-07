@@ -12,6 +12,8 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -46,33 +48,55 @@ const (
 // in-cluster.
 func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 	// Cookie security flag mirrors the redirect URL's scheme — HTTP for the
-	// dev/CTF cluster, HTTPS for production. Hash + block keys are
-	// process-random (in-flight logins fail closed on pod restart); promote
-	// to env/secret when running multiple replicas.
+	// dev/CTF cluster, HTTPS for production.
 	cookieOpts := []httphelper.CookieHandlerOpt{}
 	if strings.HasPrefix(cfg.OIDCRedirectURL, "http://") {
 		cookieOpts = append(cookieOpts, httphelper.WithUnsecure())
 	}
-	cookieHandler := httphelper.NewCookieHandler(
-		securecookie.GenerateRandomKey(64),
-		securecookie.GenerateRandomKey(32),
-		cookieOpts...,
-	)
+	// Cookie keys: prefer env-provided secrets so logins survive pod restarts
+	// and load-balance across replicas. Falling back to process-random is fine
+	// for single-replica dev but logs a loud warning.
+	hashKey := []byte(cfg.OIDCCookieHashKey)
+	blockKey := []byte(cfg.OIDCCookieBlockKey)
+	if len(hashKey) == 0 {
+		hashKey = securecookie.GenerateRandomKey(64)
+		logger.Warn("OIDC_COOKIE_HASH_KEY not set; using a process-random key — logins will break across pod restarts or replicas")
+	}
+	if len(blockKey) == 0 {
+		blockKey = securecookie.GenerateRandomKey(32)
+	}
+	cookieHandler := httphelper.NewCookieHandler(hashKey, blockKey, cookieOpts...)
 
-	relyingParty, err := newRelyingPartyWithRetry(context.Background(),
-		cfg.OIDCIssuer, cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.OIDCRedirectURL,
-		[]string{oidc.ScopeOpenID, "email", "profile"},
+	// Split-horizon: tokens carry the public issuer URL (Dex's configured
+	// issuer is fixed regardless of request host), but we discover and call
+	// the IdP through the in-cluster URL. zitadel/oidc validates that the
+	// discovery doc's `issuer` matches the arg we pass, so we pass the
+	// public one and override the fetch URL via WithCustomDiscoveryUrl.
+	expectedIssuer := cfg.OIDCIssuer
+	internalDiscoveryURL := strings.TrimSuffix(cfg.OIDCIssuer, "/") + "/.well-known/openid-configuration"
+	opts := []rp.Option{
 		rp.WithCookieHandler(cookieHandler),
 		rp.WithPKCE(cookieHandler),
+	}
+	if cfg.OIDCPublicIssuer != "" && cfg.OIDCPublicIssuer != cfg.OIDCIssuer {
+		expectedIssuer = cfg.OIDCPublicIssuer
+		opts = append(opts, rp.WithCustomDiscoveryUrl(internalDiscoveryURL))
+	}
+
+	relyingParty, err := newRelyingPartyWithRetry(context.Background(),
+		expectedIssuer, cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.OIDCRedirectURL,
+		[]string{oidc.ScopeOpenID, "email", "profile"},
+		opts...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build OIDC RelyingParty: %w", err)
 	}
 
-	// Discovery served us in-cluster endpoint URLs (Dex emits them based on
-	// the request's Host header). Backend calls + JWKS stay internal; only
-	// the AuthorizationEndpoint needs to be rebased to public so browsers
-	// land on the user-facing IdP URL.
+	// Endpoints from discovery are derived by Dex from the request Host
+	// header — fetching discovery via the in-cluster URL gives us internal
+	// endpoint URLs. Backend code exchange + JWKS stay internal; only the
+	// AuthorizationEndpoint must be rebased to public so browsers land on
+	// the user-facing IdP URL.
 	if cfg.OIDCPublicIssuer != "" && cfg.OIDCPublicIssuer != cfg.OIDCIssuer {
 		internalBase := extractBaseURL(cfg.OIDCIssuer)
 		publicBase := extractBaseURL(cfg.OIDCPublicIssuer)
@@ -82,7 +106,7 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 			"internal", internalBase, "public", publicBase, "authURL", ep.AuthURL)
 	}
 
-	logger.Info("OIDC handler initialized", "issuer", cfg.OIDCIssuer)
+	logger.Info("OIDC handler initialized", "expectedIssuer", expectedIssuer)
 	return &OIDCHandler{rp: relyingParty}, nil
 }
 
@@ -144,8 +168,10 @@ func sanitizeRelativePath(s string) (string, bool) {
 
 // Login wraps zitadel/oidc's AuthURLHandler: it signs+encrypts the state into
 // a cookie, hands it to the IdP as ?state=…, and gives it back to us after
-// verifying. We use the sanitized returnUrl as the state value so it survives
-// the round-trip without extra plumbing.
+// verifying. The state value is "<nonce>:<returnUrl>" — the nonce makes the
+// state unguessable (defeats CSRF / session-fixation: an attacker who
+// triggers /auth/login on a victim browser still can't predict the value
+// stored in the cookie), while returnUrl piggybacks for free.
 func (h *OIDCHandler) Login(c *fiber.Ctx) error {
 	rawReturn := c.Query("returnUrl", "/")
 	returnURL := "/"
@@ -154,7 +180,12 @@ func (h *OIDCHandler) Login(c *fiber.Ctx) error {
 	} else {
 		logger.Warn("OIDC login: rejected unsafe returnUrl, defaulting to /", "returnUrl", rawReturn)
 	}
-	stateFn := func() string { return returnURL }
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to mint state nonce"})
+	}
+	nonce := base64.RawURLEncoding.EncodeToString(nonceBytes)
+	stateFn := func() string { return nonce + ":" + returnURL }
 	return adaptor.HTTPHandler(rp.AuthURLHandler(stateFn, h.rp))(c)
 }
 
@@ -168,9 +199,14 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 }
 
 func (h *OIDCHandler) exchangeCallback(w http.ResponseWriter, r *http.Request, tokens *oidc.Tokens[*oidc.IDTokenClaims], state string, _ rp.RelyingParty) {
+	// state format set by Login: "<nonce>:<returnUrl>". The nonce is what
+	// zitadel/oidc already validated (cookie state == query state); we just
+	// need to recover the returnUrl. Anything else → default to "/".
 	returnURL := "/"
-	if clean, ok := sanitizeRelativePath(state); ok {
-		returnURL = clean
+	if _, urlPart, ok := strings.Cut(state, ":"); ok {
+		if clean, ok := sanitizeRelativePath(urlPart); ok {
+			returnURL = clean
+		}
 	}
 	logger.Debug("OIDC callback complete", "returnUrl", returnURL, "tokenLength", len(tokens.IDToken))
 	http.Redirect(w, r, fmt.Sprintf("%s#token=%s", returnURL, tokens.IDToken), http.StatusFound)
