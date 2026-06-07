@@ -64,6 +64,7 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 	}
 	if len(blockKey) == 0 {
 		blockKey = securecookie.GenerateRandomKey(32)
+		logger.Warn("OIDC_COOKIE_BLOCK_KEY not set; using a process-random key — logins will break across pod restarts or replicas")
 	}
 	cookieHandler := httphelper.NewCookieHandler(hashKey, blockKey, cookieOpts...)
 
@@ -107,6 +108,13 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 		internalBase := extractBaseURL(cfg.OIDCIssuer)
 		publicBase := extractBaseURL(cfg.OIDCPublicIssuer)
 		ep := &relyingParty.OAuthConfig().Endpoint
+		if !strings.Contains(ep.AuthURL, internalBase) {
+			// Discovery returned an AuthURL we can't rebase (Dex emits a host
+			// that doesn't match OIDCIssuer — config drift). Bail loudly so
+			// the failure is visible at boot, not silently as "browser
+			// redirects to the in-cluster URL that it can't reach".
+			return nil, fmt.Errorf("OIDC AuthURL %q does not contain expected internal base %q; check OIDCIssuer / IdP issuer config", ep.AuthURL, internalBase)
+		}
 		ep.AuthURL = strings.Replace(ep.AuthURL, internalBase, publicBase, 1)
 		logger.Info("OIDC auth endpoint rebased to public",
 			"internal", internalBase, "public", publicBase, "authURL", ep.AuthURL)
@@ -205,17 +213,27 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 }
 
 func (h *OIDCHandler) exchangeCallback(w http.ResponseWriter, r *http.Request, tokens *oidc.Tokens[*oidc.IDTokenClaims], state string, _ rp.RelyingParty) {
-	// state format set by Login: "<nonce>:<returnUrl>". The nonce is what
-	// zitadel/oidc already validated (cookie state == query state); we just
-	// need to recover the returnUrl. Anything else → default to "/".
-	returnURL := "/"
-	if _, urlPart, ok := strings.Cut(state, ":"); ok {
-		if clean, ok := sanitizeRelativePath(urlPart); ok {
-			returnURL = clean
-		}
-	}
+	returnURL := decodeStateReturnURL(state)
 	logger.Debug("OIDC callback complete", "returnUrl", returnURL, "tokenLength", len(tokens.IDToken))
 	http.Redirect(w, r, fmt.Sprintf("%s#token=%s", returnURL, tokens.IDToken), http.StatusFound)
+}
+
+// decodeStateReturnURL recovers and re-sanitises the returnUrl half of the
+// state minted in Login ("<nonce>:<returnUrl>"). The nonce is already
+// validated by zitadel/oidc (cookie state == query state); we only need the
+// trailing returnUrl, and we re-run it through sanitizeRelativePath as
+// defense-in-depth in case the cookie store's contents are ever trusted
+// elsewhere. Anything malformed → "/".
+func decodeStateReturnURL(state string) string {
+	_, urlPart, ok := strings.Cut(state, ":")
+	if !ok {
+		return "/"
+	}
+	clean, ok := sanitizeRelativePath(urlPart)
+	if !ok {
+		return "/"
+	}
+	return clean
 }
 
 // Logout bounces the browser home — the SPA clears its localStorage token on
