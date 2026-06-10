@@ -1,144 +1,122 @@
 // Package auth handles JWT verification and the OIDC login flow for the dploy
 // API.
 //
-// JWT verification (jwt.go) goes through the canonical go-oidc verifier; the
-// OIDC login/callback/logout flow (this file) goes through zitadel/oidc's
-// RelyingParty, which already handles state cookie, PKCE S256, nonce,
-// at_hash, id_token signature/iss/aud/exp/nbf — all the gotchas that used to
-// be hand-rolled here. What's left is dploy-specific glue: split-horizon
-// AuthURL substitution, returnUrl sanitisation, retry-on-discovery at boot,
-// the Fiber adapter, and the final "#token=..." hand-off the SPA expects.
+// Both JWT verification (jwt.go) and the OIDC login flow (this file) follow
+// the canonical Go OIDC pattern used by Kubernetes, Argo CD and the official
+// coreos/go-oidc README example: go-oidc for discovery + ID token
+// verification, golang.org/x/oauth2 for the Authorization Code + PKCE flow,
+// and three short-lived HttpOnly cookies to carry state/verifier/returnUrl
+// across the browser bounce. No framework, no signed-cookie key management,
+// nothing dploy-specific beyond the optional split-horizon issuer support
+// and the SPA's "#token=..." hand-off.
 package auth
 
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/AYDEV-FR/dploy/internal/config"
 	"github.com/AYDEV-FR/dploy/internal/logger"
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/adaptor"
-	"github.com/gorilla/securecookie"
-	"github.com/zitadel/oidc/v3/pkg/client/rp"
-	httphelper "github.com/zitadel/oidc/v3/pkg/http"
-	"github.com/zitadel/oidc/v3/pkg/oidc"
+	"golang.org/x/oauth2"
 )
 
-// OIDCHandler is a thin wrapper around zitadel/oidc's RelyingParty plus the
-// dploy-specific Fiber handlers.
+// OIDCHandler wires the canonical go-oidc + oauth2 pair into Fiber handlers.
 type OIDCHandler struct {
-	rp rp.RelyingParty
+	oauth2Config *oauth2.Config
+	verifier     *oidc.IDTokenVerifier
+	secureCookie bool
 }
 
 const (
 	discoveryTimeout  = 10 * time.Second
 	discoveryAttempts = 5
+
+	// flowCookieMaxAge bounds how long a user has to complete the IdP
+	// bounce. 10 min covers slow MFA prompts without leaving stale state
+	// cookies indefinitely.
+	flowCookieMaxAge = 10 * 60
+
+	cookieState    = "dploy_oidc_state"
+	cookieVerifier = "dploy_oidc_verifier"
+	cookieReturn   = "dploy_oidc_return"
 )
 
-// NewOIDCHandler wires zitadel/oidc's RelyingParty (which handles state
-// cookie, PKCE, nonce, at_hash + id_token verification) and substitutes the
-// AuthorizationEndpoint with its public-issuer equivalent so browser redirects
-// land on the user-facing IdP URL while backend code exchange + JWKS stay
-// in-cluster.
+// NewOIDCHandler builds the RP from OIDC discovery. Optional split-horizon
+// support: when OIDCPublicIssuer differs from OIDCIssuer, discovery is fetched
+// via the in-cluster URL but the expected `iss` is the public one, and the
+// browser-facing AuthURL is rebased to the public host. Single-URL setups
+// leave OIDCPublicIssuer empty and the split-horizon branches are no-ops.
 func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
-	// Cookie security flag mirrors the redirect URL's scheme — HTTP for the
-	// dev/CTF cluster, HTTPS for production.
-	cookieOpts := []httphelper.CookieHandlerOpt{}
-	if strings.HasPrefix(cfg.OIDCRedirectURL, "http://") {
-		cookieOpts = append(cookieOpts, httphelper.WithUnsecure())
-	}
-	// Cookie keys: prefer env-provided secrets so logins survive pod restarts
-	// and load-balance across replicas. Falling back to process-random is fine
-	// for single-replica dev but logs a loud warning.
-	hashKey := []byte(cfg.OIDCCookieHashKey)
-	blockKey := []byte(cfg.OIDCCookieBlockKey)
-	if len(hashKey) == 0 {
-		hashKey = securecookie.GenerateRandomKey(64)
-		logger.Warn("OIDC_COOKIE_HASH_KEY not set; using a process-random key — logins will break across pod restarts or replicas")
-	}
-	if len(blockKey) == 0 {
-		blockKey = securecookie.GenerateRandomKey(32)
-		logger.Warn("OIDC_COOKIE_BLOCK_KEY not set; using a process-random key — logins will break across pod restarts or replicas")
-	}
-	cookieHandler := httphelper.NewCookieHandler(hashKey, blockKey, cookieOpts...)
-
-	// Optional split-horizon issuer support: when OIDCPublicIssuer is set and
-	// differs from OIDCIssuer, the IdP is reached via two URLs — the in-cluster
-	// one (low-latency for discovery/token/JWKS) and the public one (which is
-	// what tokens carry as `iss` and what browsers must redirect to). Most
-	// deployments expose the IdP on a single URL and can leave OIDCPublicIssuer
-	// empty; the block below + the AuthURL rebase further down are no-ops then.
+	ctx := context.Background()
 	expectedIssuer := cfg.OIDCIssuer
-	opts := []rp.Option{
-		rp.WithCookieHandler(cookieHandler),
-		rp.WithPKCE(cookieHandler),
-	}
-	if cfg.OIDCPublicIssuer != "" && cfg.OIDCPublicIssuer != cfg.OIDCIssuer {
-		// zitadel/oidc validates discovery.Issuer == arg.issuer. Pass the
-		// public one (what Dex advertises) and override the fetch URL to the
-		// internal one via WithCustomDiscoveryUrl so the pod doesn't have to
-		// resolve the public host at boot.
+	splitHorizon := cfg.OIDCPublicIssuer != "" && cfg.OIDCPublicIssuer != cfg.OIDCIssuer
+	if splitHorizon {
+		// Tell go-oidc to expect tokens with iss == publicIssuer even
+		// though we hit the internal URL for the discovery doc.
+		ctx = oidc.InsecureIssuerURLContext(ctx, cfg.OIDCPublicIssuer)
 		expectedIssuer = cfg.OIDCPublicIssuer
-		internalDiscoveryURL := strings.TrimSuffix(cfg.OIDCIssuer, "/") + "/.well-known/openid-configuration"
-		opts = append(opts, rp.WithCustomDiscoveryUrl(internalDiscoveryURL))
 	}
 
-	relyingParty, err := newRelyingPartyWithRetry(context.Background(),
-		expectedIssuer, cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.OIDCRedirectURL,
-		[]string{oidc.ScopeOpenID, "email", "profile"},
-		opts...,
-	)
+	provider, err := newProviderWithRetry(ctx, cfg.OIDCIssuer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build OIDC RelyingParty: %w", err)
+		return nil, fmt.Errorf("OIDC discovery against %s: %w", cfg.OIDCIssuer, err)
 	}
 
-	// Second half of the optional split-horizon path. Dex derives the
-	// discovery doc's endpoint URLs from the request Host header, so fetching
-	// via the in-cluster URL gives us internal endpoints. Backend code
-	// exchange + JWKS stay internal (those are fine); only the
-	// AuthorizationEndpoint must be rebased to public so browsers actually
-	// land on the user-facing IdP URL.
-	if cfg.OIDCPublicIssuer != "" && cfg.OIDCPublicIssuer != cfg.OIDCIssuer {
+	endpoint := provider.Endpoint()
+	if splitHorizon {
+		// Dex derives the discovery doc's endpoints from the request Host
+		// header, so fetching via the internal URL gives us internal
+		// endpoints. Backend code exchange + JWKS stay internal (fine);
+		// only the browser-facing AuthURL must be rebased so users land on
+		// the public IdP URL.
 		internalBase := extractBaseURL(cfg.OIDCIssuer)
 		publicBase := extractBaseURL(cfg.OIDCPublicIssuer)
-		ep := &relyingParty.OAuthConfig().Endpoint
-		if !strings.Contains(ep.AuthURL, internalBase) {
-			// Discovery returned an AuthURL we can't rebase (Dex emits a host
-			// that doesn't match OIDCIssuer — config drift). Bail loudly so
-			// the failure is visible at boot, not silently as "browser
-			// redirects to the in-cluster URL that it can't reach".
-			return nil, fmt.Errorf("OIDC AuthURL %q does not contain expected internal base %q; check OIDCIssuer / IdP issuer config", ep.AuthURL, internalBase)
+		if !strings.Contains(endpoint.AuthURL, internalBase) {
+			return nil, fmt.Errorf("OIDC AuthURL %q does not contain expected internal base %q; check OIDCIssuer / IdP config", endpoint.AuthURL, internalBase)
 		}
-		ep.AuthURL = strings.Replace(ep.AuthURL, internalBase, publicBase, 1)
+		endpoint.AuthURL = strings.Replace(endpoint.AuthURL, internalBase, publicBase, 1)
 		logger.Info("OIDC auth endpoint rebased to public",
-			"internal", internalBase, "public", publicBase, "authURL", ep.AuthURL)
+			"internal", internalBase, "public", publicBase, "authURL", endpoint.AuthURL)
 	}
 
-	logger.Info("OIDC handler initialized", "expectedIssuer", expectedIssuer)
-	return &OIDCHandler{rp: relyingParty}, nil
+	h := &OIDCHandler{
+		oauth2Config: &oauth2.Config{
+			ClientID:     cfg.OIDCClientID,
+			ClientSecret: cfg.OIDCClientSecret,
+			RedirectURL:  cfg.OIDCRedirectURL,
+			Endpoint:     endpoint,
+			Scopes:       []string{oidc.ScopeOpenID, "email", "profile"},
+		},
+		verifier:     provider.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID}),
+		secureCookie: !strings.HasPrefix(cfg.OIDCRedirectURL, "http://"),
+	}
+	logger.Info("OIDC handler initialized", "expectedIssuer", expectedIssuer, "secureCookie", h.secureCookie)
+	return h, nil
 }
 
-// newRelyingPartyWithRetry rides out the post-startup network-identity window
-// (Cilium et al.) where DNS / egress briefly returns EPERM. Same shape as the
-// previous discoverWithRetry: 5 attempts, exponential backoff capped at 4 s.
-func newRelyingPartyWithRetry(ctx context.Context, issuer, clientID, clientSecret, redirectURI string, scopes []string, options ...rp.Option) (rp.RelyingParty, error) {
+// newProviderWithRetry rides out the post-startup network-identity window
+// (Cilium et al.) where DNS / egress briefly returns EPERM. 5 attempts with
+// exponential backoff capped at 4 s.
+func newProviderWithRetry(ctx context.Context, issuer string) (*oidc.Provider, error) {
 	delay := 500 * time.Millisecond
 	var lastErr error
 	for i := 1; i <= discoveryAttempts; i++ {
 		attemptCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
-		party, err := rp.NewRelyingPartyOIDC(attemptCtx, issuer, clientID, clientSecret, redirectURI, scopes, options...)
+		provider, err := oidc.NewProvider(attemptCtx, issuer)
 		cancel()
 		if err == nil {
 			if i > 1 {
 				logger.Info("OIDC discovery succeeded after retries", "attempts", i)
 			}
-			return party, nil
+			return provider, nil
 		}
 		lastErr = err
 		if i == discoveryAttempts {
@@ -180,65 +158,114 @@ func sanitizeRelativePath(s string) (string, bool) {
 	return u.String(), true
 }
 
-// Login wraps zitadel/oidc's AuthURLHandler: it signs+encrypts the state into
-// a cookie, hands it to the IdP as ?state=…, and gives it back to us after
-// verifying. The state value is "<nonce>:<returnUrl>" — the nonce makes the
-// state unguessable (defeats CSRF / session-fixation: an attacker who
-// triggers /auth/login on a victim browser still can't predict the value
-// stored in the cookie), while returnUrl piggybacks for free.
+func randomURLSafe(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func (h *OIDCHandler) setFlowCookie(c *fiber.Ctx, name, value string) {
+	c.Cookie(&fiber.Cookie{
+		Name:     name,
+		Value:    value,
+		Path:     "/auth",
+		HTTPOnly: true,
+		Secure:   h.secureCookie,
+		SameSite: "Lax",
+		MaxAge:   flowCookieMaxAge,
+	})
+}
+
+func (h *OIDCHandler) clearFlowCookie(c *fiber.Ctx, name string) {
+	c.Cookie(&fiber.Cookie{
+		Name:     name,
+		Value:    "",
+		Path:     "/auth",
+		HTTPOnly: true,
+		Secure:   h.secureCookie,
+		SameSite: "Lax",
+		MaxAge:   -1,
+	})
+}
+
+// Login follows the official go-oidc example: random state + PKCE verifier,
+// each stored in an HttpOnly cookie, plus the AuthCodeURL redirect. The
+// returnUrl piggybacks as a third cookie — no state encoding/decoding
+// gymnastics needed.
 func (h *OIDCHandler) Login(c *fiber.Ctx) error {
-	rawReturn := c.Query("returnUrl", "/")
 	returnURL := "/"
+	rawReturn := c.Query("returnUrl", "/")
 	if clean, ok := sanitizeRelativePath(rawReturn); ok {
 		returnURL = clean
 	} else {
 		logger.Warn("OIDC login: rejected unsafe returnUrl, defaulting to /", "returnUrl", rawReturn)
 	}
-	nonceBytes := make([]byte, 16)
-	if _, err := rand.Read(nonceBytes); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to mint state nonce"})
+
+	state, err := randomURLSafe(24)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to mint state"})
 	}
-	nonce := base64.RawURLEncoding.EncodeToString(nonceBytes)
-	stateFn := func() string { return nonce + ":" + returnURL }
-	return adaptor.HTTPHandler(rp.AuthURLHandler(stateFn, h.rp))(c)
+	verifier := oauth2.GenerateVerifier()
+
+	h.setFlowCookie(c, cookieState, state)
+	h.setFlowCookie(c, cookieVerifier, verifier)
+	h.setFlowCookie(c, cookieReturn, returnURL)
+
+	return c.Redirect(
+		h.oauth2Config.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier)),
+		fiber.StatusFound,
+	)
 }
 
-// Callback wraps zitadel/oidc's CodeExchangeHandler. The library does state
-// cookie verification, PKCE-aware code exchange, and full id_token
-// verification (signature, iss, aud, exp, nbf, nonce, at_hash). All we add is
-// a defense-in-depth re-sanitisation of state-as-returnUrl and the SPA's
-// hash-fragment token hand-off.
+// Callback exchanges the code for tokens, verifies the ID token, and bounces
+// the browser to returnUrl with "#token=<id_token>" so the SPA can pick it up.
+// CSRF protection comes from the state match (cookie vs query); replay
+// protection comes from PKCE.
 func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
-	return adaptor.HTTPHandler(rp.CodeExchangeHandler(h.exchangeCallback, h.rp))(c)
-}
+	state := c.Cookies(cookieState)
+	verifier := c.Cookies(cookieVerifier)
+	returnURL := c.Cookies(cookieReturn)
+	// One-shot: clear cookies before any failure path so a stale flow can't
+	// be retried by replaying the callback URL.
+	h.clearFlowCookie(c, cookieState)
+	h.clearFlowCookie(c, cookieVerifier)
+	h.clearFlowCookie(c, cookieReturn)
 
-func (h *OIDCHandler) exchangeCallback(w http.ResponseWriter, r *http.Request, tokens *oidc.Tokens[*oidc.IDTokenClaims], state string, _ rp.RelyingParty) {
-	returnURL := decodeStateReturnURL(state)
-	logger.Debug("OIDC callback complete", "returnUrl", returnURL, "tokenLength", len(tokens.IDToken))
-	http.Redirect(w, r, fmt.Sprintf("%s#token=%s", returnURL, tokens.IDToken), http.StatusFound)
-}
-
-// decodeStateReturnURL recovers and re-sanitises the returnUrl half of the
-// state minted in Login ("<nonce>:<returnUrl>"). The nonce is already
-// validated by zitadel/oidc (cookie state == query state); we only need the
-// trailing returnUrl, and we re-run it through sanitizeRelativePath as
-// defense-in-depth in case the cookie store's contents are ever trusted
-// elsewhere. Anything malformed → "/".
-func decodeStateReturnURL(state string) string {
-	_, urlPart, ok := strings.Cut(state, ":")
-	if !ok {
-		return "/"
+	if state == "" || verifier == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "missing or expired login session"})
 	}
-	clean, ok := sanitizeRelativePath(urlPart)
-	if !ok {
-		return "/"
+	if subtle.ConstantTimeCompare([]byte(c.Query("state")), []byte(state)) != 1 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "state mismatch"})
 	}
-	return clean
+
+	token, err := h.oauth2Config.Exchange(c.Context(), c.Query("code"), oauth2.VerifierOption(verifier))
+	if err != nil {
+		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "token exchange failed: " + err.Error()})
+	}
+	rawIDToken, ok := token.Extra("id_token").(string)
+	if !ok {
+		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "no id_token in token response"})
+	}
+	if _, err := h.verifier.Verify(c.Context(), rawIDToken); err != nil {
+		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "id_token verification failed: " + err.Error()})
+	}
+
+	// Re-sanitise the returnUrl from the cookie as defense-in-depth, even
+	// though Login already vetted it before setting the cookie.
+	if clean, ok := sanitizeRelativePath(returnURL); ok {
+		returnURL = clean
+	} else {
+		returnURL = "/"
+	}
+	logger.Debug("OIDC callback complete", "returnUrl", returnURL, "tokenLength", len(rawIDToken))
+	return c.Redirect(fmt.Sprintf("%s#token=%s", returnURL, rawIDToken), fiber.StatusFound)
 }
 
-// Logout bounces the browser home — the SPA clears its localStorage token on
-// the redirect. End-session at the IdP (RP-initiated logout) would be an
-// rp.EndSessionEndpoint roundtrip; add it here when an IdP requires SLO.
+// Logout bounces home — the SPA clears its localStorage token on the
+// redirect. RP-initiated logout against the IdP would be an extra round-trip;
+// add it when an IdP requires SLO.
 func (h *OIDCHandler) Logout(c *fiber.Ctx) error {
 	return c.Redirect("/", fiber.StatusFound)
 }

@@ -20,14 +20,6 @@ type Config struct {
 	OIDCClientSecret string
 	OIDCRedirectURL  string
 
-	// Cookie keys for the OIDC state / PKCE cookies (zitadel/oidc CookieHandler).
-	// Set both to stable random secrets (k8s Secret, env, etc.) when running
-	// with replicaCount > 1 or you'll get login failures on rolling updates,
-	// since requests can land on a pod that can't decrypt cookies set by
-	// another. Empty values fall back to process-random keys with a warn.
-	OIDCCookieHashKey  string // 64 bytes recommended (HMAC key)
-	OIDCCookieBlockKey string // 32 bytes (AES key)
-
 	// Kubernetes: the namespace where DployTemplate and DployInstance CRs live.
 	Namespace string
 
@@ -76,9 +68,6 @@ func Load() (*Config, error) {
 		OIDCClientID:     getEnv("OIDC_CLIENT_ID", "dploy"),
 		OIDCClientSecret: getEnv("OIDC_CLIENT_SECRET", "dploy-secret"),
 		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URL", "http://localhost:8080/auth/callback"),
-
-		OIDCCookieHashKey:  getEnv("OIDC_COOKIE_HASH_KEY", ""),
-		OIDCCookieBlockKey: getEnv("OIDC_COOKIE_BLOCK_KEY", ""),
 
 		// Kubernetes
 		Namespace: getEnv("DPLOY_NAMESPACE", "dploy-system"),
