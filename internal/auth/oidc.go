@@ -46,6 +46,7 @@ const (
 
 	cookieState    = "dploy_oidc_state"
 	cookieVerifier = "dploy_oidc_verifier"
+	cookieNonce    = "dploy_oidc_nonce"
 	cookieReturn   = "dploy_oidc_return"
 )
 
@@ -207,14 +208,19 @@ func (h *OIDCHandler) Login(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to mint state"})
 	}
+	nonce, err := randomURLSafe(16)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to mint nonce"})
+	}
 	verifier := oauth2.GenerateVerifier()
 
 	h.setFlowCookie(c, cookieState, state)
 	h.setFlowCookie(c, cookieVerifier, verifier)
+	h.setFlowCookie(c, cookieNonce, nonce)
 	h.setFlowCookie(c, cookieReturn, returnURL)
 
 	return c.Redirect(
-		h.oauth2Config.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier)),
+		h.oauth2Config.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oidc.Nonce(nonce)),
 		fiber.StatusFound,
 	)
 }
@@ -226,14 +232,16 @@ func (h *OIDCHandler) Login(c *fiber.Ctx) error {
 func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 	state := c.Cookies(cookieState)
 	verifier := c.Cookies(cookieVerifier)
+	nonce := c.Cookies(cookieNonce)
 	returnURL := c.Cookies(cookieReturn)
 	// One-shot: clear cookies before any failure path so a stale flow can't
 	// be retried by replaying the callback URL.
 	h.clearFlowCookie(c, cookieState)
 	h.clearFlowCookie(c, cookieVerifier)
+	h.clearFlowCookie(c, cookieNonce)
 	h.clearFlowCookie(c, cookieReturn)
 
-	if state == "" || verifier == "" {
+	if state == "" || verifier == "" || nonce == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "missing or expired login session"})
 	}
 	if subtle.ConstantTimeCompare([]byte(c.Query("state")), []byte(state)) != 1 {
@@ -248,8 +256,16 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 	if !ok {
 		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "no id_token in token response"})
 	}
-	if _, err := h.verifier.Verify(c.Context(), rawIDToken); err != nil {
+	idToken, err := h.verifier.Verify(c.Context(), rawIDToken)
+	if err != nil {
 		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "id_token verification failed: " + err.Error()})
+	}
+	// Nonce binds this ID token to *our* login attempt: even if both the
+	// auth code and PKCE verifier are intercepted, the IdP would return a
+	// token carrying the attacker's nonce, not ours. Constant-time compare
+	// because the nonce stays a one-shot secret until the cookie clears.
+	if subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(nonce)) != 1 {
+		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "nonce mismatch"})
 	}
 
 	// Re-sanitise the returnUrl from the cookie as defense-in-depth, even
