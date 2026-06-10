@@ -84,14 +84,6 @@ auth:
 
   oidcRedirectURL: ""
 
-  # Cookie keys for the zitadel/oidc state + PKCE cookies. Leave empty for
-  # single-replica dev (API will mint per-process random keys + log a warn).
-  # MUST be set to stable secrets when running with replicaCount > 1 or
-  # tolerating rolling updates without breaking in-flight logins.
-  # Generate with: head -c 64 /dev/urandom | base64
-  oidcCookieHashKey: ""
-  oidcCookieBlockKey: ""
-
 service:
   type: ClusterIP
   port: 80

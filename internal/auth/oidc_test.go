@@ -1,9 +1,6 @@
 package auth
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 // TestSanitizeRelativePath pins both behaviours in one go: the relative-URL
 // safety check (open-redirect surface) and the fragment-stripping canonical
@@ -42,45 +39,22 @@ func TestSanitizeRelativePath(t *testing.T) {
 	}
 }
 
-// TestDecodeStateReturnURL pins the "<nonce>:<returnUrl>" wire format. Same
-// helper produces (in Login) and consumes (in Callback) this string; if
-// either side ever changes the separator, this test fails before the SPA
-// login flow does.
-func TestDecodeStateReturnURL(t *testing.T) {
+// TestExtractBaseURL guards the split-horizon AuthURL rebase: if the helper
+// strips path/query as expected, strings.Replace(authURL, internalBase, ...)
+// hits exactly one match. The test cases mirror the two real-world Issuers
+// (in-cluster Service URL with port, public URL via ingress).
+func TestExtractBaseURL(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		state string
-		want  string
+		in, want string
 	}{
-		{"empty state", "", "/"},
-		{"no separator", "abc123", "/"},
-		{"nonce only", "abc123:", "/"},                                     // urlPart="" → reject → "/"
-		{"happy root", "abc123:/", "/"},
-		{"happy path", "abc123:/dashboard", "/dashboard"},
-		{"path with query", "abc123:/foo?x=1", "/foo?x=1"},
-		{"path with colon — only first ':' splits", "abc123:/foo:bar", "/foo:bar"},
-		{"fragment stripped (SPA hash hand-off must stay clean)", "abc123:/foo#section", "/foo"},
-		{"open-redirect via protocol-relative URL", "abc123://evil.com/x", "/"},
-		{"open-redirect via absolute URL", "abc123:http://evil.com/x", "/"},
-		{"backslash trick", "abc123:/\\evil.com/x", "/"},
+		{"http://dex.dex.svc.cluster.local:5556", "http://dex.dex.svc.cluster.local:5556"},
+		{"http://dex.dex.svc.cluster.local:5556/", "http://dex.dex.svc.cluster.local:5556"},
+		{"https://dex.dploy.ctf.local", "https://dex.dploy.ctf.local"},
+		{"https://dex.dploy.ctf.local/dex", "https://dex.dploy.ctf.local"},
+		{"https://dex.dploy.ctf.local/dex/auth?x=1", "https://dex.dploy.ctf.local"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := decodeStateReturnURL(tc.state)
-			if got != tc.want {
-				t.Errorf("decodeStateReturnURL(%q) = %q, want %q", tc.state, got, tc.want)
-			}
-		})
-	}
-
-	// Round-trip sanity: what Login encodes, Callback decodes back.
-	for _, returnURL := range []string{"/", "/foo", "/foo?x=1", "/foo:bar"} {
-		state := "deadbeef" + ":" + returnURL
-		if got := decodeStateReturnURL(state); got != returnURL {
-			t.Errorf("round-trip for %q failed: got %q", returnURL, got)
-		}
-		// And verify nonce is *not* echoed into the return URL.
-		if strings.Contains(decodeStateReturnURL(state), "deadbeef") {
-			t.Errorf("nonce leaked into returnURL for state %q", state)
+		if got := extractBaseURL(tc.in); got != tc.want {
+			t.Errorf("extractBaseURL(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
