@@ -241,14 +241,31 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 	h.clearFlowCookie(c, cookieNonce)
 	h.clearFlowCookie(c, cookieReturn)
 
+	// IdP-side failure (user cancelled, consent denied, scope rejected, …)
+	// arrives as ?error=<code>&error_description=<text> per OAuth 2.0
+	// §4.1.2.1. Surface it as a clean 400 rather than letting the request
+	// fall through to a misleading "state mismatch" or token-exchange error.
+	if idpErr := c.Query("error"); idpErr != "" {
+		logger.Warn("OIDC callback: IdP returned error",
+			"error", idpErr, "description", c.Query("error_description"))
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":             "identity provider rejected the login: " + idpErr,
+			"error_description": c.Query("error_description"),
+		})
+	}
+
 	if state == "" || verifier == "" || nonce == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "missing or expired login session"})
 	}
 	if subtle.ConstantTimeCompare([]byte(c.Query("state")), []byte(state)) != 1 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "state mismatch"})
 	}
+	code := c.Query("code")
+	if code == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "missing authorization code"})
+	}
 
-	token, err := h.oauth2Config.Exchange(c.Context(), c.Query("code"), oauth2.VerifierOption(verifier))
+	token, err := h.oauth2Config.Exchange(c.Context(), code, oauth2.VerifierOption(verifier))
 	if err != nil {
 		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "token exchange failed: " + err.Error()})
 	}
