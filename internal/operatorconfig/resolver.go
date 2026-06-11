@@ -29,19 +29,19 @@ const (
 
 // Effective is the merged, ready-to-use operator configuration.
 type Effective struct {
-	DefaultEngine         dployv1alpha1.EngineType
-	FluxNamespace         string
-	FluxServiceAccount    string
-	FluxInterval          time.Duration
+	DefaultEngine             dployv1alpha1.EngineType
+	FluxNamespace             string
+	FluxServiceAccount        string
+	FluxInterval              time.Duration
 	BaseDomain                string
 	ConnectionURLTemplate     string
 	DefaultConnectionType     dployv1alpha1.ConnectionType
 	ConnectionMessageTemplate string
 	TTLSeconds                int64
-	ExtendSeconds         int64
-	MaxExtends            int
-	MaxInstancesPerUser   int
-	Values                map[string]any
+	ExtendSeconds             int64
+	MaxExtends                int
+	MaxInstancesPerUser       int
+	Values                    map[string]any
 }
 
 // Resolve reads the OperatorConfig named "default" and merges it over the
