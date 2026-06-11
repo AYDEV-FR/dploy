@@ -2,7 +2,7 @@ package auth
 
 import "testing"
 
-// TestSanitizeRelativePath pins both behaviours in one go: the relative-URL
+// TestSanitizeRelativePath pins both behaviors in one go: the relative-URL
 // safety check (open-redirect surface) and the fragment-stripping canonical
 // form the SPA's consumeHashToken() relies on. Both come out of one
 // net/url.Parse pass — no string fiddling.

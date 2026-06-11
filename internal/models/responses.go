@@ -6,10 +6,10 @@ type AvailableEnvironmentResponse struct {
 	Icon        string `json:"icon"`
 	Category    string `json:"category,omitempty"`
 	// TTL info
-	TTL         int  `json:"ttl"`                   // Initial TTL in seconds (-1 for unlimited)
-	ExtendTTL   int  `json:"extendTTL,omitempty"`   // Seconds added per extension (0 = use default)
-	MaxExtends  int  `json:"maxExtends,omitempty"`  // Max extensions allowed (0 = unlimited)
-	IsUnlimited bool `json:"isUnlimited"`           // True if TTL is unlimited
+	TTL         int  `json:"ttl"`                  // Initial TTL in seconds (-1 for unlimited)
+	ExtendTTL   int  `json:"extendTTL,omitempty"`  // Seconds added per extension (0 = use default)
+	MaxExtends  int  `json:"maxExtends,omitempty"` // Max extensions allowed (0 = unlimited)
+	IsUnlimited bool `json:"isUnlimited"`          // True if TTL is unlimited
 }
 
 type UserEnvironmentResponse struct {

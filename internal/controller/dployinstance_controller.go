@@ -301,15 +301,15 @@ func (r *DployInstanceReconciler) buildData(inst *dployv1alpha1.DployInstance, t
 	}
 
 	return &templating.Data{
-		Owner:       sanitize(owner),
-		UUID:        inst.Status.UUID,
-		BaseDomain:  eff.BaseDomain,
-		Host:        defaultHost(inst.Spec.TemplateRef, inst.Status.UUID, eff.BaseDomain),
-		Namespace:   targetNS,
-		Template:    tmpl,
-		Params:      params,
-		Claims:      claims,
-		Config:      templating.Config{Values: eff.Values},
+		Owner:      sanitize(owner),
+		UUID:       inst.Status.UUID,
+		BaseDomain: eff.BaseDomain,
+		Host:       defaultHost(inst.Spec.TemplateRef, inst.Status.UUID, eff.BaseDomain),
+		Namespace:  targetNS,
+		Template:   tmpl,
+		Params:     params,
+		Claims:     claims,
+		Config:     templating.Config{Values: eff.Values},
 	}, nil
 }
 

@@ -40,16 +40,16 @@ func NewJWTValidator(jwksURL, issuer, audience, usernameClaim string) *JWTValida
 	return &JWTValidator{verifier: verifier, usernameClaim: usernameClaim}
 }
 
-// Validate verifies the token and returns (sanitizedUsername, raw claims, err).
-// All cryptographic and standard-claim checks live inside Verify; the only
-// dploy-specific work is pulling the configured username claim and sanitizing
-// it for use as a Kubernetes label.
-func (v *JWTValidator) Validate(tokenString string) (string, map[string]any, error) {
+// Validate verifies the token and returns the sanitized username plus the raw
+// claims. All cryptographic and standard-claim checks live inside Verify; the
+// only dploy-specific work is pulling the configured username claim and
+// sanitizing it for use as a Kubernetes label.
+func (v *JWTValidator) Validate(tokenString string) (username string, claims map[string]any, err error) {
 	idToken, err := v.verifier.Verify(context.Background(), tokenString)
 	if err != nil {
 		return "", nil, fmt.Errorf("token parsing failed: %w", err)
 	}
-	claims := map[string]any{}
+	claims = map[string]any{}
 	if err := idToken.Claims(&claims); err != nil {
 		return "", nil, fmt.Errorf("decode claims: %w", err)
 	}

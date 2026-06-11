@@ -284,7 +284,7 @@ func (c *Client) ExtendInstance(ctx context.Context, inst *dployv1alpha1.DployIn
 		return time.Time{}, fmt.Errorf("%w (%d)", ErrMaxExtends, maxExtends)
 	}
 
-	newExpires := inst.Spec.ExpiresAt.Time.Add(time.Duration(extendSeconds) * time.Second)
+	newExpires := inst.Spec.ExpiresAt.Add(time.Duration(extendSeconds) * time.Second)
 	patch := client.MergeFrom(inst.DeepCopy())
 	t := metav1.NewTime(newExpires)
 	inst.Spec.ExpiresAt = &t
