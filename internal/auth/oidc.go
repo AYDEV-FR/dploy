@@ -241,7 +241,7 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 	h.clearFlowCookie(c, cookieNonce)
 	h.clearFlowCookie(c, cookieReturn)
 
-	// IdP-side failure (user cancelled, consent denied, scope rejected, …)
+	// IdP-side failure (user canceled, consent denied, scope rejected, …)
 	// arrives as ?error=<code>&error_description=<text> per OAuth 2.0
 	// §4.1.2.1. Surface it as a clean 400 rather than letting the request
 	// fall through to a misleading "state mismatch" or token-exchange error.
@@ -267,7 +267,10 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 
 	token, err := h.oauth2Config.Exchange(c.Context(), code, oauth2.VerifierOption(verifier))
 	if err != nil {
-		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "token exchange failed: " + err.Error()})
+		// Detail stays server-side: oauth2 errors embed the token endpoint
+		// URL, which would map internal cluster topology for the caller.
+		logger.Error("OIDC callback: token exchange failed", "error", err)
+		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "token exchange failed"})
 	}
 	rawIDToken, ok := token.Extra("id_token").(string)
 	if !ok {
@@ -275,7 +278,8 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 	}
 	idToken, err := h.verifier.Verify(c.Context(), rawIDToken)
 	if err != nil {
-		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "id_token verification failed: " + err.Error()})
+		logger.Error("OIDC callback: id_token verification failed", "error", err)
+		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "id_token verification failed"})
 	}
 	// Nonce binds this ID token to *our* login attempt: even if both the
 	// auth code and PKCE verifier are intercepted, the IdP would return a
@@ -285,7 +289,7 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "nonce mismatch"})
 	}
 
-	// Re-sanitise the returnUrl from the cookie as defense-in-depth, even
+	// Re-sanitize the returnUrl from the cookie as defense-in-depth, even
 	// though Login already vetted it before setting the cookie.
 	if clean, ok := sanitizeRelativePath(returnURL); ok {
 		returnURL = clean
