@@ -148,7 +148,7 @@ func main() {
 
 	// Admin endpoints — gated by MANAGER_ENABLED + the admin claim/value pair.
 	// 404 when disabled, 403 to non-admin requesters. Shared manager-gate
-	// middleware so both routes get the same 404 behaviour off-feature.
+	// middleware so both routes get the same 404 behavior off-feature.
 	managerGate := func(c *fiber.Ctx) error {
 		if !cfg.ManagerEnabled {
 			return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Error: "manager disabled"})
