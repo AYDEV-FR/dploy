@@ -73,19 +73,26 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 
 	endpoint := provider.Endpoint()
 	if splitHorizon {
-		// Dex derives the discovery doc's endpoints from the request Host
-		// header, so fetching via the internal URL gives us internal
-		// endpoints. Backend code exchange + JWKS stay internal (fine);
-		// only the browser-facing AuthURL must be rebased so users land on
-		// the public IdP URL.
+		// What the discovery doc advertises depends on the IdP. Dex bakes
+		// its configured `issuer` into every endpoint, so fetching the doc
+		// via the internal URL still yields *public* endpoints — nothing to
+		// rebase (the backend reaches the public token endpoint via
+		// hostAliases/DNS). IdPs that derive endpoints from the request
+		// Host instead return internal URLs; for those, the browser-facing
+		// AuthURL must be rebased onto the public host.
 		internalBase := extractBaseURL(cfg.OIDCIssuer)
 		publicBase := extractBaseURL(cfg.OIDCPublicIssuer)
-		if !strings.Contains(endpoint.AuthURL, internalBase) {
-			return nil, fmt.Errorf("OIDC AuthURL %q does not contain expected internal base %q; check OIDCIssuer / IdP config", endpoint.AuthURL, internalBase)
+		switch {
+		case strings.HasPrefix(endpoint.AuthURL, publicBase):
+			logger.Info("OIDC auth endpoint already public, no rebase needed", "authURL", endpoint.AuthURL)
+		case strings.HasPrefix(endpoint.AuthURL, internalBase):
+			endpoint.AuthURL = strings.Replace(endpoint.AuthURL, internalBase, publicBase, 1)
+			logger.Info("OIDC auth endpoint rebased to public",
+				"internal", internalBase, "public", publicBase, "authURL", endpoint.AuthURL)
+		default:
+			logger.Warn("OIDC auth endpoint matches neither issuer base; leaving as-is",
+				"authURL", endpoint.AuthURL, "internal", internalBase, "public", publicBase)
 		}
-		endpoint.AuthURL = strings.Replace(endpoint.AuthURL, internalBase, publicBase, 1)
-		logger.Info("OIDC auth endpoint rebased to public",
-			"internal", internalBase, "public", publicBase, "authURL", endpoint.AuthURL)
 	}
 
 	h := &OIDCHandler{
