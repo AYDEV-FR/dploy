@@ -5,7 +5,7 @@
 // the canonical Go OIDC pattern used by Kubernetes, Argo CD and the official
 // coreos/go-oidc README example: go-oidc for discovery + ID token
 // verification, golang.org/x/oauth2 for the Authorization Code + PKCE flow,
-// and three short-lived HttpOnly cookies to carry state/verifier/returnUrl
+// and four short-lived HttpOnly cookies to carry state/verifier/nonce/returnUrl
 // across the browser bounce. No framework, no signed-cookie key management,
 // nothing dploy-specific beyond the optional split-horizon issuer support
 // and the SPA's "#token=..." hand-off.
@@ -162,6 +162,13 @@ func sanitizeRelativePath(s string) (string, bool) {
 	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil {
 		return "", false
 	}
+	// A percent-encoded backslash (e.g. "/%5cevil.com") survives the literal
+	// "/\\" prefix check above but decodes into u.Path; user agents that
+	// normalize "\" to "/" would then read "//evil.com" as protocol-relative.
+	// Reject any backslash in the decoded path to close that bypass.
+	if strings.Contains(u.Path, "\\") {
+		return "", false
+	}
 	u.Fragment = ""
 	return u.String(), true
 }
@@ -293,7 +300,9 @@ func (h *OIDCHandler) Callback(c *fiber.Ctx) error {
 	// token carrying the attacker's nonce, not ours. Constant-time compare
 	// because the nonce stays a one-shot secret until the cookie clears.
 	if subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(nonce)) != 1 {
-		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "nonce mismatch"})
+		// Client-side/session issue or an attack, not an upstream failure —
+		// mirror the state-mismatch path with a 400 rather than a 502.
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "nonce mismatch"})
 	}
 
 	// Re-sanitize the returnUrl from the cookie as defense-in-depth, even

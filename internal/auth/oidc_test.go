@@ -23,6 +23,9 @@ func TestSanitizeRelativePath(t *testing.T) {
 		// classic open-redirect tricks — all rejected
 		{"//evil.com/x", "", false},       // protocol-relative URL
 		{"/\\evil.com/x", "", false},      // backslash-prefixed (some browsers)
+		{"/%5cevil.com/x", "", false},     // percent-encoded backslash
+		{"/%5Cevil.com/x", "", false},     // percent-encoded backslash (upper)
+		{"/foo/%5cbar", "", false},        // encoded backslash mid-path
 		{"http://evil.com/x", "", false},  // absolute URL
 		{"https://evil.com/x", "", false}, // absolute URL https
 		{"javascript:alert(1)", "", false},
