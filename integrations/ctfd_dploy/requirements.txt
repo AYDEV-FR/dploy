@@ -1,0 +1,2 @@
+# The plugin only needs an HTTP client; CTFd already ships Flask/SQLAlchemy.
+requests>=2.28

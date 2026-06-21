@@ -1,0 +1,65 @@
+/* Copyright the Dploy authors. SPDX-License-Identifier: MIT */
+.dploy-panel {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  border-radius: 6px;
+}
+.dploy-panel .dploy-head {
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+.dploy-panel .dploy-state {
+  margin-bottom: 0.35rem;
+}
+.dploy-panel .dploy-badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(80, 160, 120, 0.18);
+  font-size: 0.85em;
+}
+.dploy-panel .dploy-exp {
+  margin-left: 0.5rem;
+  opacity: 0.75;
+  font-size: 0.85em;
+}
+.dploy-panel .dploy-link {
+  margin-bottom: 0.5rem;
+  word-break: break-all;
+}
+.dploy-panel .dploy-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.dploy-panel .dploy-btn {
+  padding: 0.3rem 0.75rem;
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.dploy-panel .dploy-btn:hover:not(:disabled) {
+  background: rgba(127, 127, 127, 0.12);
+}
+.dploy-panel .dploy-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.dploy-panel .dploy-start {
+  border-color: rgba(80, 160, 120, 0.6);
+}
+.dploy-panel .dploy-stop {
+  border-color: rgba(200, 90, 90, 0.6);
+}
+.dploy-panel .dploy-msg {
+  margin-top: 0.45rem;
+  min-height: 1.1em;
+  font-size: 0.88em;
+  opacity: 0.85;
+}
+.dploy-panel.dploy-busy {
+  opacity: 0.7;
+}

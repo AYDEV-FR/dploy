@@ -1,0 +1,32 @@
+# CTFd image carrying both the OIDC provider and the Dploy plugin.
+#
+# Build context is the repo root (see docker-compose.yml) so this plugin's
+# source is available; the companion oidc_provider plugin is cloned at a pinned
+# ref. ctfd_dploy itself is bind-mounted by compose for live editing.
+ARG CTFD_VERSION=3.7.7
+FROM ctfd/ctfd:${CTFD_VERSION}
+
+USER root
+
+# git is needed to fetch the companion plugin; build deps for the JWT libs are
+# already present in the CTFd image.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git \
+ && rm -rf /var/lib/apt/lists/*
+
+# Plugin runtime deps: Authlib + PyYAML (oidc_provider), requests (ctfd_dploy;
+# usually already present, pinned here for safety).
+RUN pip install --no-cache-dir Authlib PyYAML "requests>=2.28"
+
+# Companion OIDC provider plugin. The repo layout puts the plugin either at the
+# repo root or under an oidc_provider/ subdir; handle both.
+ARG OIDC_PROVIDER_REF=main
+RUN git clone --depth 1 --branch ${OIDC_PROVIDER_REF} \
+      https://github.com/AYDEV-FR/ctfd-oidc-provider.git /tmp/oidcp \
+ && if [ -f /tmp/oidcp/__init__.py ]; then SRC=/tmp/oidcp; else SRC=/tmp/oidcp/oidc_provider; fi \
+ && cp -r "$SRC" /opt/CTFd/CTFd/plugins/oidc_provider \
+ && rm -rf /tmp/oidcp/.git \
+ && pip install --no-cache-dir -r /opt/CTFd/CTFd/plugins/oidc_provider/requirements.txt || true
+
+# Drop back to the unprivileged CTFd user.
+USER 1001

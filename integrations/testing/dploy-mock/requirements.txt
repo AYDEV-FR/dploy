@@ -1,0 +1,4 @@
+Flask>=3.0
+PyJWT[crypto]>=2.8
+requests>=2.28
+gunicorn>=21.2

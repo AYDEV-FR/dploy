@@ -1,0 +1,70 @@
+# End-to-end test stack for the CTFd → Dploy plugin.
+#
+#   docker compose up --build
+#   open http://localhost:8000   (first run: create the admin account)
+#
+# What you get:
+#   * CTFd at :8000 with BOTH plugins loaded (oidc_provider + ctfd_dploy)
+#   * The "dploy" OAuth client pre-provisioned (trusted, confidential)
+#   * A mock Dploy API at :8080 that validates the CTFd-issued token exactly
+#     like real Dploy (iss / aud / signature against CTFd's JWKS), so the whole
+#     auth + proxy + UI path is exercised without a Kubernetes cluster.
+#
+# Then: log in, create a challenge whose Connection Info is
+#   http://dploy-mock:8080/run/demo
+# and the Start / Refresh / Extend / Stop panel appears in its modal.
+services:
+  ctfd:
+    build:
+      context: ../..
+      dockerfile: integrations/testing/Dockerfile.ctfd
+    container_name: ctfd-dploy-test
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - AUTHLIB_INSECURE_TRANSPORT=1            # local HTTP only
+      - DATABASE_URL=sqlite:////data/ctfd.db
+      - SECRET_KEY=local-dev-not-secret-change-me
+      # >=2 so the plugin's server-side OIDC self-calls (discovery + token
+      # exchange to CTFd's own endpoints) are served by another worker and
+      # don't deadlock the request that issued them.
+      - WORKERS=4
+      # --- OIDC provider plugin ---
+      - OIDC_PROVIDER_ISSUER=http://localhost:8000
+      - OIDC_PROVIDER_JWK_FILE=/opt/CTFd/CTFd/uploads/oidc_jwks.json
+      - OIDC_PROVIDER_APPS_FILE=/etc/ctfd/oidc_apps.yaml
+      # --- ctfd_dploy plugin ---
+      - DPLOY_OIDC_ISSUER=http://localhost:8000
+      - DPLOY_OIDC_CLIENT_ID=dploy
+      - DPLOY_OIDC_CLIENT_SECRET=dploy-secret
+      - DPLOY_OIDC_REDIRECT_URI=http://localhost:8000/plugins/ctfd_dploy/auth/callback
+      - DPLOY_API_URL=http://dploy-mock:8080      # allowlist + base for the proxy
+    volumes:
+      # Live-mount this plugin so you can edit it and just restart CTFd.
+      - ../ctfd_dploy:/opt/CTFd/CTFd/plugins/ctfd_dploy:ro
+      - ./oidc_apps.yaml:/etc/ctfd/oidc_apps.yaml:ro
+      - ctfd_db:/data
+      - ctfd_uploads:/opt/CTFd/CTFd/uploads
+      - ctfd_logs:/opt/CTFd/CTFd/logs
+    depends_on:
+      - dploy-mock
+
+  dploy-mock:
+    build: ./dploy-mock
+    container_name: dploy-mock
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Mirror real Dploy's JWT validation. JWKS is fetched in-network; the
+      # expected issuer is the public one the browser used (split-horizon).
+      - DPLOY_JWKS_URL=http://ctfd:8000/oauth/jwks
+      - DPLOY_JWT_ISSUER=http://localhost:8000
+      - DPLOY_JWT_AUDIENCE=dploy
+      - DPLOY_JWT_USERNAME_CLAIM=name
+
+volumes:
+  ctfd_db:
+  ctfd_uploads:
+  ctfd_logs:
