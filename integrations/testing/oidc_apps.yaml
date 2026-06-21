@@ -1,0 +1,20 @@
+# Declarative OAuth client provisioning for the OIDC provider plugin.
+# Upserted on CTFd startup (matched by client_id).
+#
+# The "dploy" client is shared by Dploy itself and the ctfd_dploy plugin: using
+# one client_id keeps the token `aud` aligned with Dploy's JWT_AUDIENCE=dploy,
+# which is why no auth problem appears. `trusted: true` makes the plugin's
+# auth-code bounce auto-approve (no consent screen).
+applications:
+  - name: Dploy
+    client_id: dploy
+    client_secret: dploy-secret
+    type: confidential
+    trusted: true
+    redirect_uris:
+      - http://localhost:8000/plugins/ctfd_dploy/auth/callback
+      # Add Dploy's own SPA callback here too in a real deployment, e.g.:
+      # - https://dploy.example.com/auth/callback
+    scopes: [openid, profile, email]
+    grant_types: [authorization_code, refresh_token]
+    token_endpoint_auth_method: client_secret_basic
