@@ -72,16 +72,21 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 	}
 
 	endpoint := provider.Endpoint()
+	// verifier checks the id_token: signature against the JWKS, and iss against
+	// expectedIssuer (the public issuer under split-horizon). By default use the
+	// provider's discovered JWKS; split-horizon overrides it below.
+	verifier := provider.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID})
 	if splitHorizon {
-		// What the discovery doc advertises depends on the IdP. Dex bakes
-		// its configured `issuer` into every endpoint, so fetching the doc
-		// via the internal URL still yields *public* endpoints — nothing to
-		// rebase (the backend reaches the public token endpoint via
-		// hostAliases/DNS). IdPs that derive endpoints from the request
-		// Host instead return internal URLs; for those, the browser-facing
-		// AuthURL must be rebased onto the public host.
+		// Split-horizon: the IdP is reached at two URLs — an in-cluster one for
+		// backend traffic (OIDCIssuer) and a public one for the browser
+		// (OIDCPublicIssuer). The browser-facing AuthURL must be public; all
+		// backend calls (token exchange, JWKS) must be in-cluster so they don't
+		// need public DNS or trusting the gateway's (internal-CA) TLS.
 		internalBase := extractBaseURL(cfg.OIDCIssuer)
 		publicBase := extractBaseURL(cfg.OIDCPublicIssuer)
+		// AuthURL (browser) -> public. IdPs that derive endpoints from the
+		// request Host return internal URLs (rebase); IdPs that bake a public
+		// issuer already return public ones.
 		switch {
 		case strings.HasPrefix(endpoint.AuthURL, publicBase):
 			logger.Info("OIDC auth endpoint already public, no rebase needed", "authURL", endpoint.AuthURL)
@@ -93,6 +98,24 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 			logger.Warn("OIDC auth endpoint matches neither issuer base; leaving as-is",
 				"authURL", endpoint.AuthURL, "internal", internalBase, "public", publicBase)
 		}
+		// TokenURL (backend) -> in-cluster. When the IdP baked a public issuer,
+		// the discovered token endpoint is public; rebase it onto the internal host.
+		if strings.HasPrefix(endpoint.TokenURL, publicBase) {
+			endpoint.TokenURL = strings.Replace(endpoint.TokenURL, publicBase, internalBase, 1)
+			logger.Info("OIDC token endpoint rebased to internal",
+				"public", publicBase, "internal", internalBase, "tokenURL", endpoint.TokenURL)
+		}
+		// JWKS (backend) -> in-cluster. The discovered jwks_uri follows the
+		// public issuer; verify against the configured in-cluster JWKS instead,
+		// while still asserting iss == public issuer.
+		if cfg.JWKSUrl != "" {
+			verifier = oidc.NewVerifier(
+				expectedIssuer,
+				oidc.NewRemoteKeySet(context.Background(), cfg.JWKSUrl),
+				&oidc.Config{ClientID: cfg.OIDCClientID},
+			)
+			logger.Info("OIDC id_token verified against in-cluster JWKS", "jwksURL", cfg.JWKSUrl, "expectedIssuer", expectedIssuer)
+		}
 	}
 
 	h := &OIDCHandler{
@@ -103,7 +126,7 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 			Endpoint:     endpoint,
 			Scopes:       cfg.OIDCScopes,
 		},
-		verifier:     provider.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID}),
+		verifier:     verifier,
 		secureCookie: !strings.HasPrefix(cfg.OIDCRedirectURL, "http://"),
 	}
 	logger.Info("OIDC handler initialized", "expectedIssuer", expectedIssuer, "secureCookie", h.secureCookie)
