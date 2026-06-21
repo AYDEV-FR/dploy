@@ -61,7 +61,18 @@ jobs:
           echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
           echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
-      - name: Log in to Container Registry
+      # Two credential stores need populating: docker/login-action writes
+      # ~/.docker/config.json (read by cosign when it pushes the signature),
+      # while helm push uses Helm's own registry config. Authenticating only
+      # one leaves the other UNAUTHORIZED.
+      - name: Log in to Container Registry (cosign)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Helm registry
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" \
             | helm registry login "${REGISTRY}" --username "${{ github.actor }}" --password-stdin
