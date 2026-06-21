@@ -84,6 +84,14 @@ auth:
 
   oidcRedirectURL: ""
 
+  # OAuth scopes requested at authorization. Add IdP-specific scopes whose
+  # claims feed adminClaim / a template's ownerClaim (e.g. "team" or "groups").
+  # "openid" is always ensured by the API.
+  oidcScopes:
+    - openid
+    - profile
+    - email
+
 service:
   type: ClusterIP
   port: 80

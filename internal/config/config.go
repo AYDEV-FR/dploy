@@ -3,7 +3,9 @@ package config
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -19,6 +21,7 @@ type Config struct {
 	OIDCClientID     string
 	OIDCClientSecret string
 	OIDCRedirectURL  string
+	OIDCScopes       []string // OAuth scopes requested at authorization
 
 	// Kubernetes: the namespace where DployTemplate and DployInstance CRs live.
 	Namespace string
@@ -68,6 +71,10 @@ func Load() (*Config, error) {
 		OIDCClientID:     getEnv("OIDC_CLIENT_ID", "dploy"),
 		OIDCClientSecret: getEnv("OIDC_CLIENT_SECRET", "dploy-secret"),
 		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URL", "http://localhost:8080/auth/callback"),
+		// Scopes requested at authorization. Configurable so deployments can
+		// request IdP-specific scopes (e.g. "team" / "groups") whose claims feed
+		// AdminClaim / OwnerClaim. "openid" is always ensured below.
+		OIDCScopes: getEnvAsList("OIDC_SCOPES", []string{"openid", "profile", "email"}),
 
 		// Kubernetes
 		Namespace: getEnv("DPLOY_NAMESPACE", "dploy-system"),
@@ -92,6 +99,11 @@ func Load() (*Config, error) {
 
 		// Debug
 		Debug: getEnvAsBool("DEBUG", false),
+	}
+
+	// "openid" is mandatory for OIDC (the id_token is required); ensure it.
+	if !slices.Contains(cfg.OIDCScopes, "openid") {
+		cfg.OIDCScopes = append([]string{"openid"}, cfg.OIDCScopes...)
 	}
 
 	if cfg.JWKSUrl == "" {
@@ -121,6 +133,21 @@ func getEnvAsInt(key string, defaultValue int) int {
 		return defaultValue
 	}
 	return value
+}
+
+// getEnvAsList splits on commas and/or whitespace, trimming empties.
+func getEnvAsList(key string, defaultValue []string) []string {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	fields := strings.FieldsFunc(valueStr, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	})
+	if len(fields) == 0 {
+		return defaultValue
+	}
+	return fields
 }
 
 func getEnvAsBool(key string, defaultValue bool) bool {
