@@ -18,6 +18,9 @@ data:
   {{- if .Values.auth.oidcRedirectURL }}
   OIDC_REDIRECT_URL: {{ .Values.auth.oidcRedirectURL | quote }}
   {{- end }}
+  {{- with .Values.auth.oidcScopes }}
+  OIDC_SCOPES: {{ join "," . | quote }}
+  {{- end }}
   CATALOG_ENABLED: {{ .Values.config.catalogEnabled | quote }}
   INSTANCES_LIST_ENABLED: {{ .Values.config.instancesListEnabled | quote }}
   MANAGER_ENABLED: {{ .Values.config.managerEnabled | quote }}

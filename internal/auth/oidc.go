@@ -101,7 +101,7 @@ func NewOIDCHandler(cfg *config.Config) (*OIDCHandler, error) {
 			ClientSecret: cfg.OIDCClientSecret,
 			RedirectURL:  cfg.OIDCRedirectURL,
 			Endpoint:     endpoint,
-			Scopes:       []string{oidc.ScopeOpenID, "email", "profile"},
+			Scopes:       cfg.OIDCScopes,
 		},
 		verifier:     provider.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID}),
 		secureCookie: !strings.HasPrefix(cfg.OIDCRedirectURL, "http://"),
