@@ -16,10 +16,15 @@ spec:
       {{- include "dploy.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
+        # Roll the pod whenever the Secret changes. dploy reads OIDC_CLIENT_SECRET
+        # (and the JWKS/issuer values) as env vars, injected once at container
+        # start, so a Helm-updated Secret is otherwise ignored until a manual
+        # restart — e.g. rotating the OIDC client_secret breaks SSO silently.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       labels:
         {{- include "dploy.selectorLabels" . | nindent 8 }}
     spec:
