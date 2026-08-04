@@ -186,6 +186,7 @@ export async function renderManager(): Promise<void> {
               <th>URL</th>
               <th>EXPIRES</th>
               <th>AGE</th>
+              <th>CLAIM</th>
               <th>NAMESPACE</th>
               <th>UUID</th>
             </tr>
@@ -211,6 +212,7 @@ export async function renderManager(): Promise<void> {
                   <td class="url-cell">${url}</td>
                   <td>${expires}</td>
                   <td><span title="${esc(r.createdAt)}">${esc(ageSince(r.createdAt))}</span></td>
+                  <td>${r.claim ? `<code>${esc(r.claim)}</code>` : '<span class="muted">—</span>'}</td>
                   <td>${r.namespace ? `<code>${esc(r.namespace)}</code>` : '<span class="muted">—</span>'}</td>
                   <td>${r.uuid ? `<code>${esc(r.uuid)}</code>` : '<span class="muted">—</span>'}</td>
                 </tr>`;

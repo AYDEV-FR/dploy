@@ -62,10 +62,6 @@ spec:
             description: DployInstanceSpec is the desired state of a single deployed
               environment.
             properties:
-              claims:
-                description: Claims is a snapshot of the requester's JWT claims, exposed
-                  to value templates as `.Claims`.
-                x-kubernetes-preserve-unknown-fields: true
               expiresAt:
                 description: ExpiresAt is the absolute expiry time. Empty for unlimited
                   TTL or an unclaimed pool member.
@@ -78,8 +74,11 @@ spec:
               params:
                 additionalProperties:
                   type: string
-                description: Params holds request-supplied parameter values, exposed
-                  to value templates as `.Params`.
+                description: |-
+                  Params is the request context exposed to value templates as `.Params`: the
+                  parameters the template declares, merged with the JWT claims the API server
+                  forwards. It is the only requester-supplied data an instance carries — the
+                  raw bearer token stops at the API and never reaches the cluster.
                 type: object
               pooled:
                 description: Pooled marks this instance as a member of a template's

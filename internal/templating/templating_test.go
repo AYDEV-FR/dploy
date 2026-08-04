@@ -5,8 +5,6 @@ package templating
 
 import (
 	"testing"
-
-	"k8s.io/apimachinery/pkg/runtime"
 )
 
 func TestRender(t *testing.T) {
@@ -15,11 +13,10 @@ func TestRender(t *testing.T) {
 		UUID:       "abc12345",
 		BaseDomain: "env.dploy.dev",
 		Host:       "vscode-abc12345.env.dploy.dev",
-		Params:     map[string]string{"size": "large"},
-		Claims:     map[string]any{"email": "a@b.c"},
+		Params:     map[string]string{"size": "large", "email": "a@b.c"},
 	}
 	out, err := Render("t",
-		`{{ .Owner }}|{{ .UUID }}|{{ .Params.size }}|{{ .Claims.email }}|{{ upper "x" }}|{{ .Host }}`,
+		`{{ .Owner }}|{{ .UUID }}|{{ .Params.size }}|{{ .Params.email }}|{{ upper "x" }}|{{ .Host }}`,
 		data)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -31,7 +28,9 @@ func TestRender(t *testing.T) {
 }
 
 func TestRenderMissingKeyDoesNotError(t *testing.T) {
-	if _, err := Render("t", `{{ .Claims.absent }}`, &Data{Claims: map[string]any{}}); err != nil {
+	// A template may reference an optional parameter (or an identity claim the
+	// deployment doesn't forward) without failing the whole instance.
+	if _, err := Render("t", `{{ .Params.absent }}`, &Data{Params: map[string]string{}}); err != nil {
 		t.Errorf("missing key should not error, got %v", err)
 	}
 }
@@ -42,17 +41,11 @@ func TestRenderParseError(t *testing.T) {
 	}
 }
 
-func TestClaimsMap(t *testing.T) {
-	m, err := ClaimsMap(&runtime.RawExtension{Raw: []byte(`{"email":"a@b.c","groups":["x","y"]}`)})
-	if err != nil {
-		t.Fatalf("ClaimsMap: %v", err)
-	}
-	if m["email"] != "a@b.c" {
-		t.Errorf("email = %v", m["email"])
-	}
-	// nil snapshot yields a usable empty map.
-	empty, err := ClaimsMap(nil)
-	if err != nil || empty == nil || len(empty) != 0 {
-		t.Errorf("nil claims: got %v, err %v", empty, err)
+// TestRenderRejectsRemovedClaimsVariable pins the removal of `.Claims`: request
+// context now arrives as a single `.Params` map, so a template still reaching for
+// the old variable must fail loudly rather than silently render an empty string.
+func TestRenderRejectsRemovedClaimsVariable(t *testing.T) {
+	if _, err := Render("t", `{{ .Claims.email }}`, &Data{}); err == nil {
+		t.Error("expected an error for a template referencing the removed .Claims")
 	}
 }

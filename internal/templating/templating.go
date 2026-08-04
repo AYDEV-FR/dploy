@@ -8,12 +8,10 @@ package templating
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"text/template"
 
 	"github.com/Masterminds/sprig/v3"
-	"k8s.io/apimachinery/pkg/runtime"
 
 	dployv1alpha1 "github.com/AYDEV-FR/dploy/api/v1alpha1"
 )
@@ -43,17 +41,17 @@ type Data struct {
 	Namespace string
 	// Template is the DployTemplate this instance derives from.
 	Template *dployv1alpha1.DployTemplate
-	// Params are the request-supplied parameters.
+	// Params is the request context: the parameters the template declares, merged
+	// with the JWT claims the API server was configured to forward. It is the only
+	// requester-supplied data a template sees — the raw token never leaves the API.
 	Params map[string]string
-	// Claims is the requester's JWT claims snapshot.
-	Claims map[string]any
 	// Config holds cluster-wide operator config values.
 	Config Config
 }
 
 // Render parses and executes a single template against data. Missing map keys
-// render as their zero value rather than erroring, so optional claims/params are
-// safe to reference.
+// render as their zero value rather than erroring, so optional params are safe
+// to reference.
 func Render(name, text string, data *Data) (string, error) {
 	tmpl, err := template.New(name).
 		Funcs(sprig.TxtFuncMap()).
@@ -67,17 +65,4 @@ func Render(name, text string, data *Data) (string, error) {
 		return "", fmt.Errorf("render %s template: %w", name, err)
 	}
 	return buf.String(), nil
-}
-
-// ClaimsMap decodes a RawExtension claims snapshot into a map. A nil or empty
-// snapshot yields an empty (non-nil) map.
-func ClaimsMap(raw *runtime.RawExtension) (map[string]any, error) {
-	out := map[string]any{}
-	if raw == nil || len(raw.Raw) == 0 {
-		return out, nil
-	}
-	if err := json.Unmarshal(raw.Raw, &out); err != nil {
-		return nil, fmt.Errorf("decode claims: %w", err)
-	}
-	return out, nil
 }

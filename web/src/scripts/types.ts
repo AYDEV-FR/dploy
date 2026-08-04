@@ -94,6 +94,8 @@ export interface AdminInstanceRow {
   expiresAt: string;
   createdAt: string;
   namespace: string;
+  /** Name of the DployInstanceClaim holding it; empty for an unclaimed pool member. */
+  claim: string;
   uuid: string;
   isUnlimited: boolean;
 }

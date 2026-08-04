@@ -81,6 +81,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "DployInstance")
 		os.Exit(1)
 	}
+	if err := (&controller.DployInstanceClaimReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		APIReader: mgr.GetAPIReader(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DployInstanceClaim")
+		os.Exit(1)
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

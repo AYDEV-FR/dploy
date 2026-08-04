@@ -10,9 +10,12 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dployv1alpha1 "github.com/AYDEV-FR/dploy/api/v1alpha1"
 	"github.com/AYDEV-FR/dploy/internal/operatorconfig"
@@ -142,10 +145,26 @@ func resolveInstanceTTL(tmpl *dployv1alpha1.DployTemplate, eff operatorconfig.Ef
 }
 
 // SetupWithManager registers the controller with the manager.
+//
+// Instances are watched by label rather than by ownership: claiming a warm pool
+// member hands its controller reference over to the DployInstanceClaim, so an
+// Owns() watch would go quiet on exactly the events that should refill the pool.
 func (r *DployTemplateReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&dployv1alpha1.DployTemplate{}).
-		Owns(&dployv1alpha1.DployInstance{}).
+		Watches(&dployv1alpha1.DployInstance{}, handler.EnqueueRequestsFromMapFunc(templateForInstance)).
 		Named("dploytemplate").
 		Complete(r)
+}
+
+// templateForInstance routes an instance event back to the template it derives from.
+func templateForInstance(_ context.Context, obj client.Object) []reconcile.Request {
+	inst, ok := obj.(*dployv1alpha1.DployInstance)
+	if !ok || inst.Spec.TemplateRef == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: inst.Namespace,
+		Name:      inst.Spec.TemplateRef,
+	}}}
 }

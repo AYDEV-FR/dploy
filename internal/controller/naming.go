@@ -20,6 +20,11 @@ const (
 	LabelTemplate = dployv1alpha1.LabelTemplate
 	LabelInstance = dployv1alpha1.LabelInstance
 	LabelPooled   = dployv1alpha1.LabelPooled
+	LabelClaim    = dployv1alpha1.LabelClaim
+	LabelClaimUID = dployv1alpha1.LabelClaimUID
+
+	// AnnotationBoundAt is the durable TTL anchor stamped on a bound instance.
+	AnnotationBoundAt = dployv1alpha1.AnnotationBoundAt
 
 	// InstanceFinalizer guards teardown of an instance's HelmRelease and namespace.
 	InstanceFinalizer = "dploy.dev/instance-cleanup"

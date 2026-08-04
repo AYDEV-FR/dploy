@@ -108,10 +108,7 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	inst.Status.Namespace = targetNS
 	inst.Status.Engine = dployv1alpha1.EngineFlux
 
-	data, err := r.buildData(&inst, &tmpl, eff, targetNS)
-	if err != nil {
-		return r.fail(ctx, original, &inst, "ClaimsDecodeError", err.Error())
-	}
+	data := r.buildData(&inst, &tmpl, eff, targetNS)
 
 	// Resolve the connection URL: template override → config default → fallback host.
 	url := "https://" + data.Host
@@ -282,21 +279,16 @@ func (r *DployInstanceReconciler) ensureMeta(inst *dployv1alpha1.DployInstance) 
 	return changed
 }
 
-func (r *DployInstanceReconciler) buildData(inst *dployv1alpha1.DployInstance, tmpl *dployv1alpha1.DployTemplate, eff operatorconfig.Effective, targetNS string) (*templating.Data, error) {
+func (r *DployInstanceReconciler) buildData(inst *dployv1alpha1.DployInstance, tmpl *dployv1alpha1.DployTemplate, eff operatorconfig.Effective, targetNS string) *templating.Data {
 	owner := inst.Spec.Owner
-	claims, err := templating.ClaimsMap(inst.Spec.Claims)
-	if err != nil {
-		return nil, err
-	}
 	params := inst.Spec.Params
 
-	// Pool instances are anonymous: owner, claims and params are never exposed to
-	// the templates, so a warm instance is identical for everyone and claiming it
-	// does not reconfigure the workload (the catalog enforces that pool templates
-	// don't reference .Owner/.Claims/.Params and declare no parameters).
+	// Pool instances are anonymous: owner and params are never exposed to the
+	// templates, so a warm instance is identical for everyone and claiming it does
+	// not reconfigure the workload (the catalog enforces that pool templates don't
+	// reference .Owner/.Params and declare no parameters).
 	if inst.Spec.Pooled {
 		owner = ""
-		claims = map[string]any{}
 		params = nil
 	}
 
@@ -308,9 +300,8 @@ func (r *DployInstanceReconciler) buildData(inst *dployv1alpha1.DployInstance, t
 		Namespace:  targetNS,
 		Template:   tmpl,
 		Params:     params,
-		Claims:     claims,
 		Config:     templating.Config{Values: eff.Values},
-	}, nil
+	}
 }
 
 // applyTTL resolves the effective expiry, stamps status.ExpiresAt, and deletes
