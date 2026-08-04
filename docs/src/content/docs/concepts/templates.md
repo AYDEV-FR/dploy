@@ -1,11 +1,19 @@
 ---
-title: Templates & Instances
-description: Define your catalog with DployTemplate and understand the DployInstance lifecycle.
+title: Templates, Claims & Instances
+description: Define your catalog with DployTemplate, request environments with DployInstanceClaim, and understand the DployInstance lifecycle.
 ---
 
-The catalog is defined with **`DployTemplate`** resources. When a user launches a template, the
-API creates (or claims) a **`DployInstance`**, which the operator reconciles into a running
-environment.
+Three resources, one per job:
+
+| Resource | Who writes it | What it is |
+|---|---|---|
+| **`DployTemplate`** | you | a catalog entry: which chart, how it is configured, how long it lives |
+| **`DployInstanceClaim`** | the API, or you with `kubectl` | a *request* for one environment of a template |
+| **`DployInstance`** | the operator | the environment itself, reconciled into Flux resources |
+
+Launching an environment means writing a claim. The operator binds it — handing over a warm pool
+member or provisioning an instance on demand — and projects the instance's state back onto the
+claim, so a caller only ever watches the object it created.
 
 ## DployTemplate
 
@@ -142,8 +150,12 @@ spec:
     recycle: true    # replace an instance after it is released
 ```
 
-When a user launches a pool template, the API **claims** an `Available` instance (stamping the
-owner and starting its TTL). The controller then provisions a replacement to refill the pool.
+When a claim arrives for a pool template, the operator binds one `Available` instance to it — the
+owner and the TTL clock are stamped at that moment. The DployTemplate controller then provisions a
+replacement to refill the pool.
+
+If no warm instance is free, `spec.waitForPool` decides: `true` (the API's default) parks the claim
+as `Pending` until one frees up, `false` provisions a dedicated instance on demand instead.
 
 ### Connection URLs
 
@@ -161,14 +173,14 @@ spec:
 ### Values templating
 
 `valuesTemplate` is rendered with Go `text/template` + [sprig](https://masterminds.github.io/sprig/) against the instance context
-(`.Owner`, `.UUID`, `.Host`, `.URL`, `.Params`, `.Claims`, `.Config.Values`, …). The
+(`.Owner`, `.UUID`, `.Host`, `.URL`, `.Params`, `.Config.Values`, …). The
 result is parsed as YAML and handed to the `HelmRelease`.
 
 ```yaml
 valuesTemplate: |
   workspaceName: "{{ .Owner }}-workspace"
   sessionId: "{{ .UUID }}"
-  email: "{{ .Claims.email }}"
+  email: "{{ .Params.email }}"
   ingress:
     host: "{{ .Host }}"
   {{- if eq .Params.size "large" }}
@@ -177,10 +189,80 @@ valuesTemplate: |
   {{- end }}
 ```
 
+## DployInstanceClaim
+
+A claim is a request for one environment. It is the only dploy resource the API writes, and the
+only one you need to write by hand to drive the operator.
+
+```yaml
+apiVersion: dploy.dev/v1alpha1
+kind: DployInstanceClaim
+metadata:
+  name: john-doe-webterm       # conventionally <owner>-<template>: one claim per pair
+  namespace: dploy-system
+spec:
+  templateRef: webterm
+  owner: john-doe              # the identity key: quota, listing and naming all use it
+  waitForPool: true            # empty pool → wait, rather than provision on demand
+  params:                      # request params + the forwarded JWT claims, seen as .Params
+    shell: /bin/zsh
+    email: john@example.com
+  ttlSeconds: 0                # 0 = the template's default; raise it to extend
+status:
+  phase: Bound
+  instanceRef: webterm-pool-x9k2
+  uuid: a1b2c3d4
+  connectionURL: https://webterm-a1b2c3d4.env.dploy.dev
+  connectionType: web
+  instancePhase: Claimed
+  health: Healthy
+  boundAt: "2026-01-14T16:00:00Z"     # the TTL anchor
+  expiresAt: "2026-01-15T16:00:00Z"   # boundAt + ttlSeconds
+  ttlSeconds: 86400                   # granted, after clamping
+  maxTTLSeconds: 100800               # ceiling spec.ttlSeconds may be raised to
+```
+
+### Claim phases
+
+| Phase | Meaning |
+|-------|---------|
+| `Pending` | Accepted, not holding an environment yet — typically waiting for a warm instance |
+| `Bound` | An instance is bound and owned by the claim; `status` mirrors it |
+| `Rejected` | Unsatisfiable as written (quota exceeded, unknown or disabled template). Terminal until the spec changes |
+| `Expired` | The environment outlived its TTL and was torn down. The claim survives as a tombstone and no longer counts against the quota |
+
+The `Bound` condition carries the reason and a human-readable message — why a claim is waiting, or
+why it was refused. The `Ready` condition mirrors the bound instance's readiness.
+
+### TTL and extensions
+
+The clock starts **when the claim binds**, not when it is created, so time spent queueing for a
+warm instance costs nothing. Extending is a patch, not a verb:
+
+```bash
+kubectl patch dclaim john-doe-webterm --type=merge -p '{"spec":{"ttlSeconds":100800}}'
+```
+
+The operator clamps the result to `status.maxTTLSeconds` — the template's base TTL plus its full
+extend budget (`ttl.maxExtends × ttl.extendSeconds`) — and reports what it actually granted in
+`status.ttlSeconds`. `-1` means unlimited, and is only honored where the template is itself
+unlimited.
+
+### Teardown
+
+The claim **owns** the instance it binds, so deleting the claim cascades:
+
+```bash
+kubectl delete dclaim john-doe-webterm
+```
+
+The instance's finalizer then removes the `HelmRelease` and the workload namespace. For a pool
+template, the DployTemplate controller provisions a fresh warm member to take its place.
+
 ## DployInstance
 
-A `DployInstance` is one deployed (or pooled) environment. The API creates it; you rarely write
-one by hand. Its **status** is owned by the operator.
+A `DployInstance` is one deployed (or pooled) environment. The operator creates it — from a claim,
+or as a warm pool member — and owns its **status**. You rarely write one by hand.
 
 ```yaml
 apiVersion: dploy.dev/v1alpha1
@@ -191,6 +273,15 @@ metadata:
   labels:
     dploy.dev/owner: john-doe
     dploy.dev/template: webterm
+    dploy.dev/claim: john-doe-webterm      # the claim holding it
+    dploy.dev/claim-uid: 3f2b1c9a-…        # the binding itself
+  annotations:
+    dploy.dev/bound-at: "2026-01-14T16:00:00Z"
+  ownerReferences:                          # the claim owns it → delete cascades
+    - apiVersion: dploy.dev/v1alpha1
+      kind: DployInstanceClaim
+      name: john-doe-webterm
+      controller: true
 spec:
   templateRef: webterm
   owner: john-doe
@@ -209,7 +300,7 @@ status:
   expiresAt: "2026-01-15T16:00:00Z"
 ```
 
-### Phases
+### Instance phases
 
 | Phase | Meaning |
 |-------|---------|

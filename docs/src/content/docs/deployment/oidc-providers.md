@@ -8,7 +8,7 @@ Dploy requires an OIDC-compliant identity provider for authentication. This guid
 
 Dploy uses OIDC for **user authentication** (web UI login) and **JWT validation** (API
 authorization). The user's JWT claims are also captured on each `DployInstance` and exposed to
-your `valuesTemplate` as `.Claims`.
+your `valuesTemplate` as `.Params`, provided you list them in `FORWARDED_CLAIMS`.
 
 ## Required OIDC settings
 

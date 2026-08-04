@@ -8,20 +8,21 @@ Dploy turns a Helm chart into a self-service, time-boxed environment: a user pic
 
 - **Operator + API split** — a stateless GoFiber API writes custom resources; a controller-runtime operator reconciles them. The API has **no Flux permissions** (an auditable RBAC boundary — a compromised API can't create arbitrary workloads).
 - **Flux-native GitOps** — every environment is a real Flux `HelmRelease` from a Git or Helm/OCI chart source, inspectable with `flux` and `kubectl`.
-- **CRD-driven** — `DployTemplate` (the catalog) and `DployInstance` (a single environment), drivable via the API or plain `kubectl`.
+- **CRD-driven** — `DployTemplate` (the catalog), `DployInstanceClaim` (a request for an environment) and `DployInstance` (the environment itself), drivable via the API or plain `kubectl`.
 - **Warm pools** — pre-provision instances so users claim an environment instantly, with no cold-start wait.
-- **OIDC auth** — JWT validation via JWKS; the requester's claims flow into your chart values for per-user customization.
-- **Templated values & URLs** — render Helm values and connection URLs with Go templates + [sprig](https://masterminds.github.io/sprig/), using the owner, UUID, params, and claims.
-- **TTL, extensions & quotas** — per-template lifetimes, `/extend`, and per-user limits; expired instances clean themselves up via a finalizer.
+- **OIDC auth** — JWT validation via JWKS; the claims you choose to forward flow into your chart values for per-user customization, and nothing else leaves the API.
+- **Templated values & URLs** — render Helm values and connection URLs with Go templates + [sprig](https://masterminds.github.io/sprig/), using the owner, UUID and request params.
+- **TTL, extensions & quotas** — the operator anchors each lifetime at the moment an environment is handed over, caps extensions at the template's budget, and enforces per-owner limits; expired environments clean themselves up via a finalizer.
 - **Embedded web UI** — a minimalist interface served directly by the API image.
 
 ## How it works
 
 1. A user picks a template (the catalog is the set of enabled `DployTemplate`s) through the API or UI.
-2. The API creates a `DployInstance` custom resource — it never touches Flux directly.
-3. The operator reconciles it into a Flux source + `HelmRelease`, deployed into a dedicated namespace `<owner>-<template>-<uuid>`.
-4. The environment is exposed at `<owner>-<uuid>.<baseDomain>` (or a custom `connectionURLTemplate`).
-5. When the TTL elapses, the operator's finalizer removes the `HelmRelease` and the workload namespace.
+2. The API writes a `DployInstanceClaim` — a request naming the template and the owner. That is the only thing it writes; it never touches Flux, and it never decides which environment you get.
+3. The operator binds the claim: it hands over a warm pool member, or provisions a `DployInstance` on demand. The claim owns the instance, so deleting the claim tears the environment down.
+4. The operator reconciles the instance into a Flux source + `HelmRelease`, deployed into a dedicated namespace `<owner>-<template>-<uuid>`.
+5. The environment is exposed at `<owner>-<uuid>.<baseDomain>` (or a custom `connectionURLTemplate`), and the instance's status is projected back onto the claim so a caller watches one object.
+6. When the TTL elapses, the operator's finalizer removes the `HelmRelease` and the workload namespace.
 
 See the [Architecture](https://docs.dploy.dev/concepts/architecture/) docs for the full design.
 
@@ -84,7 +85,7 @@ spec:
       message: "Hello {{ .Owner }} — instance {{ .UUID }}"
 ```
 
-See [Templates & Instances](https://docs.dploy.dev/concepts/templates/) for git charts, pools, parameters, and ownership.
+See [Templates, Claims & Instances](https://docs.dploy.dev/concepts/templates/) for git charts, pools, parameters, and ownership.
 
 ## API endpoints
 
@@ -127,7 +128,7 @@ Full documentation: **https://docs.dploy.dev**
 - [Installation](https://docs.dploy.dev/installation/) — Helm install and values reference
 - [Configuration](https://docs.dploy.dev/configuration/) — environment variables and the `OperatorConfig`
 - [Architecture](https://docs.dploy.dev/concepts/architecture/) — operator/API split, RBAC boundary, lifecycle
-- [Templates & Instances](https://docs.dploy.dev/concepts/templates/) — define your catalog
+- [Templates, Claims & Instances](https://docs.dploy.dev/concepts/templates/) — define your catalog
 - [API Reference](https://docs.dploy.dev/api/overview/) — REST API
 - Deployment: [OIDC Providers](https://docs.dploy.dev/deployment/oidc-providers/) · [TLS Certificates](https://docs.dploy.dev/deployment/tls-certificates/) · [ExternalDNS](https://docs.dploy.dev/deployment/external-dns/) · [Security Considerations](https://docs.dploy.dev/deployment/security-considerations/)
 

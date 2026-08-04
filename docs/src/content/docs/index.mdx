@@ -26,11 +26,12 @@ namespace and URL — then tears it down automatically when its TTL expires.
 
 Dploy is split into two cooperating pieces:
 
-- **The operator** reconciles `DployTemplate` and `DployInstance` custom resources into Flux
-  sources + `HelmRelease`s, manages warm pools, and enforces TTLs.
+- **The operator** binds `DployInstanceClaim`s to environments, reconciles `DployTemplate` and
+  `DployInstance` custom resources into Flux sources + `HelmRelease`s, manages warm pools, and
+  enforces TTLs and quotas.
 - **The API** (GoFiber + OIDC) is a thin, stateless server that authenticates users, lists the
-  catalog, and creates instances. It only ever writes custom resources — it never touches Flux
-  directly.
+  catalog, and files environment requests. The only thing it writes is a claim — it never touches
+  Flux, and every decision about what happens next belongs to the operator.
 
 <CardGrid>
   <Card title="Operator + API" icon="puzzle">
@@ -73,4 +74,4 @@ Each environment:
 - [Installation](/installation/) — deploy the operator and API with Helm
 - [Configuration](/configuration/) — environment variables and the `OperatorConfig`
 - [Architecture](/concepts/architecture/) — how the pieces fit together
-- [Templates & Instances](/concepts/templates/) — define your catalog
+- [Templates, Claims & Instances](/concepts/templates/) — define your catalog
