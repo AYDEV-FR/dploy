@@ -40,9 +40,11 @@ Successful responses return JSON directly; errors include an `error` field:
 | `400` | Bad request (e.g. missing required parameter) |
 | `401` | Unauthorized — invalid or missing token |
 | `403` | Forbidden — quota exceeded |
-| `404` | Template or instance not found |
-| `409` | Conflict — maximum TTL extensions reached |
-| `503` | Pool exhausted — no warm instance to claim, retry shortly |
+| `404` | Template or environment not found |
+| `409` | Conflict — the environment is already at the maximum lifetime its template allows |
+
+An empty warm pool is not an error: the request is recorded and reported as `pending` with a
+`message` saying what it is waiting for, until an instance frees up.
 
 ## Endpoints
 

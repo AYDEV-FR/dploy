@@ -72,13 +72,13 @@ dploy/
 ├── cmd/
 │   ├── api/                 # API server entrypoint
 │   └── operator/            # operator (manager) entrypoint
-├── api/v1alpha1/            # CRD types: DployTemplate, DployInstance, OperatorConfig
+├── api/v1alpha1/            # CRD types: DployTemplate, DployInstanceClaim, DployInstance, OperatorConfig
 ├── internal/
 │   ├── auth/                # JWT/OIDC validation + middleware
 │   ├── config/              # API env-var config
 │   ├── handlers/            # HTTP handlers (run, environments, health)
-│   ├── kube/                # API's CR client (no Flux)
-│   ├── controller/          # reconcilers + Flux builders
+│   ├── kube/                # API's CR client (claims + catalog; no Flux)
+│   ├── controller/          # reconcilers (+ envtest suite) + Flux builders
 │   ├── operatorconfig/      # OperatorConfig resolver
 │   ├── templating/          # Go text/template + sprig renderer
 │   ├── logger/

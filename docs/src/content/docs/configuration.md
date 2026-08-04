@@ -23,6 +23,7 @@ Dploy has two configuration surfaces:
 |----------|---------|-------------|
 | `JWT_AUDIENCE` | `dploy` | Expected JWT `aud` claim |
 | `JWT_USERNAME_CLAIM` | `name` | Claim used as the username |
+| `FORWARDED_CLAIMS` | `sub,preferred_username,email,name,groups` | The only claims copied out of the token into a `DployInstanceClaim`, where templates read them as `.Params`. Everything else stops at the API server |
 | `OIDC_ISSUER` | `$JWT_ISSUER` | OIDC issuer (internal, for token exchange) |
 | `OIDC_PUBLIC_ISSUER` | `$OIDC_ISSUER` | OIDC issuer used for browser redirects |
 | `OIDC_CLIENT_ID` | `dploy` | OIDC client ID |
@@ -33,9 +34,9 @@ Dploy has two configuration surfaces:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DPLOY_NAMESPACE` | `dploy-system` | Namespace where `DployTemplate`/`DployInstance` CRs live |
-| `MAX_ENVIRONMENTS_PER_USER` | `5` | Per-user quota (a template may override it) |
-| `DEFAULT_TTL` | `86400` | Fallback initial TTL in seconds |
+| `DPLOY_NAMESPACE` | `dploy-system` | Namespace where the dploy CRs live |
+| `MAX_ENVIRONMENTS_PER_USER` | `5` | Displayed quota. The cap the operator actually enforces comes from `OperatorConfig.defaults.maxInstancesPerUser` (or the template's override) |
+| `DEFAULT_TTL` | `86400` | Fallback initial TTL in seconds, for display. The operator resolves the real one |
 | `EXTEND_TTL` | `7200` | Fallback extension granted per `/extend` |
 
 ### Server
@@ -133,8 +134,7 @@ spec:
 | `.URL` / `.ConnectionURL` | `string` | Set after `connectionURLTemplate` renders; only available in `valuesTemplate` and `connectionMessageTemplate` |
 | `.Namespace` | `string` | The instance's workload namespace |
 | `.Template` | `*DployTemplate` | Full template spec, useful for `{{ .Template.Name }}` / `{{ .Template.Spec.X }}` |
-| `.Params` | `map[string]string` | Request-supplied params (nil in pool — anonymity) |
-| `.Claims` | `map[string]any` | Requester's JWT claims (empty in pool — anonymity) |
+| `.Params` | `map[string]string` | The whole request context: the params the template declares, merged with the claims listed in `FORWARDED_CLAIMS`. The raw token never reaches the cluster (nil in pool — anonymity) |
 | `.Config.Values` | `map[string]any` | `OperatorConfig.spec.values` |
 
 ### Overriding `connectionURLTemplate` per template

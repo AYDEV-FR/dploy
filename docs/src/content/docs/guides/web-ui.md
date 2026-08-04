@@ -75,7 +75,7 @@ environment URL once the status becomes `Healthy`. A `Degraded` status or timeou
 ```bash
 kubectl get helmrelease -n dploy-system
 flux get helmrelease -n dploy-system
-kubectl describe dployinstance <name> -n dploy-system
+kubectl describe dployinstanceclaim <name> -n dploy-system
 ```
 
 **"Maximum N environments allowed"** — you've hit your quota; delete an environment or ask an

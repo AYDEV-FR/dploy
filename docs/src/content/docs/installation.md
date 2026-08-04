@@ -150,7 +150,7 @@ helm install dploy ./charts/dploy \
 ```yaml
 # values.yaml
 config:
-  namespace: dploy-system          # where DployTemplate/DployInstance CRs live
+  namespace: dploy-system          # where the dploy CRs live
   defaultTTL: 86400                # fallback TTL when a template omits it
   maxEnvironmentsPerUser: 5
 
@@ -223,13 +223,14 @@ make docker-build-operator   # operator image -> dploy-operator:local
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `config.namespace` | Namespace holding the CRs (empty = release namespace) | `""` |
-| `config.maxEnvironmentsPerUser` | Per-user quota (fallback) | `5` |
-| `config.defaultTTL` | Default initial TTL in seconds | `86400` |
+| `config.maxEnvironmentsPerUser` | Quota shown in the UI (the operator enforces `OperatorConfig.defaults.maxInstancesPerUser`) | `5` |
+| `config.defaultTTL` | Initial TTL shown in the UI (the operator resolves the real one) | `86400` |
 | `config.extendTTL` | Default extension granted per `/extend` | `7200` |
 | `auth.jwksURL` | JWKS endpoint for JWT validation | — (required) |
 | `auth.jwtIssuer` | Expected JWT issuer | — (required) |
 | `auth.jwtAudience` | Expected JWT audience | `dploy` |
 | `auth.jwtUsernameClaim` | Claim used as the username | `preferred_username` |
+| `auth.forwardedClaims` | The only JWT claims copied into a claim's `spec.params` (seen by templates as `.Params`) | `[sub, preferred_username, email, name, groups]` |
 | `auth.oidcClientID` / `oidcClientSecret` | OIDC client credentials | `dploy` / — |
 | `auth.oidcRedirectURL` | OIDC callback URL | — |
 | `ingress.enabled` / `className` / `host` / `tls` | Ingress for the API/UI | `false` / `nginx` / … |
@@ -248,11 +249,11 @@ make docker-build-operator   # operator image -> dploy-operator:local
 ```bash
 kubectl get pods -n dploy-system
 kubectl get crds | grep dploy.dev
-kubectl get dploytemplates,dployinstances -A
+kubectl get dploytemplates,dployinstanceclaims,dployinstances -A
 ```
 
 ## Next steps
 
 - [Configuration](/configuration/) — environment variables and the `OperatorConfig`
-- [Templates & Instances](/concepts/templates/) — define your catalog
+- [Templates, Claims & Instances](/concepts/templates/) — define your catalog
 - [OIDC Providers](/deployment/oidc-providers/) — configure authentication

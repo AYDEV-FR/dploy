@@ -87,6 +87,14 @@ Create a new environment (or claim a warm pool member), or return the user's exi
 Template parameters declared on the `DployTemplate` are read from the **query string**
 (e.g. `?size=large`); missing required parameters return `400`.
 
+This records the request as a `DployInstanceClaim` and returns immediately with whatever the
+operator has made of it so far — usually `pending`. Poll `/run/:env/status` until the URL appears.
+Calling it again for the same environment is idempotent: the claim is named after the
+(owner, template) pair, so you get the same environment back rather than a second one.
+
+`?wait=false` asks for an on-demand instance when a pool template has no warm one left. The
+default (`wait=true`) waits for one instead — a pool exists so that environments start warm.
+
 ```json
 {
   "uuid": "a1b2c3d4",
@@ -94,19 +102,26 @@ Template parameters declared on the `DployTemplate` are read from the **query st
   "url": "https://john-doe-a1b2c3d4.env.dploy.dev",
   "expiresAt": "2026-01-15T16:00:00Z",
   "owner": "team-a",
-  "shared": true
+  "shared": true,
+  "message": "waiting for a warm instance of template \"webterm\""
 }
 ```
 
 **Status values:** `pending`, `Progressing`, `Healthy`, `Degraded`, `Deleting`.
 
+`message` explains why an environment is not running yet — waiting on the pool, refused over
+quota, expired. It is absent once the environment is up.
+
 | Code | Error | Cause |
 |------|-------|-------|
 | 400 | missing required parameter … | a required template parameter was omitted |
 | 401 | unauthorized | invalid or missing token |
-| 403 | Maximum N environments allowed | per-user quota exceeded |
+| 403 | owner … already holds the maximum of N environment(s) | per-owner quota exceeded |
 | 404 | environment … not found | unknown or disabled template |
-| 503 | no pooled instance available… | pool template temporarily exhausted |
+
+A quota rejection is reported on the request that *observes* it: the operator decides, so the
+first call may return `200` with `status: pending` and the rejection surfaces on the next poll.
+Delete the environment to retry a rejected request.
 
 ### GET /run/:env/status
 
