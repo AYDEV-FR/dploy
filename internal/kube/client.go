@@ -2,19 +2,22 @@
 // SPDX-License-Identifier: MIT
 
 // Package kube is the dploy API server's Kubernetes client. It reads the catalog
-// (DployTemplate) and creates/claims/extends/deletes environments (DployInstance).
-// It deliberately never touches Flux or workload resources — that is the
-// operator's job. The API only ever writes dploy.dev custom resources.
+// (DployTemplate) and creates, extends and deletes environment requests
+// (DployInstanceClaim). Its only other access is *read-only* on DployInstances,
+// for the Manager UI's cluster-wide view. It never writes an instance and never
+// touches Flux or workloads: the operator owns binding, TTL and teardown, and the
+// API's job is to turn an authenticated request into a claim and read back what
+// the operator made of it.
 package kube
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,20 +32,18 @@ import (
 	"github.com/AYDEV-FR/dploy/internal/logger"
 )
 
-// annotationExtendCount tracks TTL extensions. It lives in instance metadata
-// (API-owned) so the API never has to write the operator-owned status.
-const annotationExtendCount = "dploy.dev/extend-count"
+const maxClaimNameLen = 253
 
-const maxInstanceNameLen = 253
-
-// ErrPoolExhausted is returned when a pool template has no warm instance to claim.
-var ErrPoolExhausted = errors.New("no pooled instance available, try again shortly")
-
-// ErrUnlimitedTTL is returned when extending an instance that never expires.
+// ErrUnlimitedTTL is returned when extending an environment that never expires.
 var ErrUnlimitedTTL = errors.New("environment has unlimited TTL, no extension needed")
 
-// ErrMaxExtends is returned when an instance has reached its extension limit.
+// ErrMaxExtends is returned when an environment has reached the lifetime its
+// template allows.
 var ErrMaxExtends = errors.New("maximum extensions reached")
+
+// ErrNotBound is returned when extending an environment that has no lifetime yet
+// because the operator has not bound it.
+var ErrNotBound = errors.New("environment is not running yet, nothing to extend")
 
 type Client struct {
 	c         client.Client
@@ -53,7 +54,7 @@ type Client struct {
 // GetConfig returns the API server configuration.
 func (c *Client) GetConfig() *config.Config { return c.config }
 
-// Namespace is where the catalog and instances live.
+// Namespace is where the catalog and claims live.
 func (c *Client) Namespace() string { return c.namespace }
 
 func NewClient(cfg *config.Config) (*Client, error) {
@@ -131,24 +132,44 @@ func (c *Client) GetTemplate(ctx context.Context, name string) (*dployv1alpha1.D
 	return &t, nil
 }
 
-// --- Instances (DployInstance) ---
+// --- Instances (DployInstance), read-only ---
 
-// ListUserInstances returns the instances owned by a user.
-func (c *Client) ListUserInstances(ctx context.Context, owner string) ([]dployv1alpha1.DployInstance, error) {
+// ListAllInstances returns every DployInstance in the configured namespace,
+// including unclaimed warm pool members. It exists for the Manager UI's
+// cluster-wide view and is the *only* place the API touches an instance — the
+// API's Role grants get/list/watch and nothing more, so it can observe what the
+// operator built but never alter it.
+func (c *Client) ListAllInstances(ctx context.Context) ([]dployv1alpha1.DployInstance, error) {
 	var list dployv1alpha1.DployInstanceList
-	if err := c.c.List(ctx, &list,
-		client.InNamespace(c.namespace),
-		client.MatchingLabels{dployv1alpha1.LabelOwner: owner},
-	); err != nil {
+	if err := c.c.List(ctx, &list, client.InNamespace(c.namespace)); err != nil {
 		return nil, err
 	}
 	return list.Items, nil
 }
 
-// ListOwnedInstances lists instances whose owner label is one of the given keys.
-// Used to show every environment a requester owns when ownership keys differ per
-// template (e.g. a user's personal instances plus their teams' shared instances).
-func (c *Client) ListOwnedInstances(ctx context.Context, owners []string) ([]dployv1alpha1.DployInstance, error) {
+// --- Environment requests (DployInstanceClaim) ---
+
+// GetOwnerClaim returns an owner's live claim for a template, or nil. Terminal
+// claims (Rejected, Expired) are reported too: the caller decides whether to
+// surface the outcome or replace the request.
+func (c *Client) GetOwnerClaim(ctx context.Context, owner, templateRef string) (*dployv1alpha1.DployInstanceClaim, error) {
+	var claim dployv1alpha1.DployInstanceClaim
+	err := c.c.Get(ctx, types.NamespacedName{Namespace: c.namespace, Name: ClaimName(owner, templateRef)}, &claim)
+	switch {
+	case apierrors.IsNotFound(err):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	case !claim.DeletionTimestamp.IsZero():
+		return nil, nil
+	}
+	return &claim, nil
+}
+
+// ListOwnedClaims lists the claims whose owner label is one of the given keys.
+// Ownership keys differ per template (a user's own environments plus the ones
+// their teams share), so listing takes every identity the requester maps to.
+func (c *Client) ListOwnedClaims(ctx context.Context, owners []string) ([]dployv1alpha1.DployInstanceClaim, error) {
 	if len(owners) == 0 {
 		return nil, nil
 	}
@@ -156,7 +177,7 @@ func (c *Client) ListOwnedInstances(ctx context.Context, owners []string) ([]dpl
 	if err != nil {
 		return nil, err
 	}
-	var list dployv1alpha1.DployInstanceList
+	var list dployv1alpha1.DployInstanceClaimList
 	if err := c.c.List(ctx, &list,
 		client.InNamespace(c.namespace),
 		client.MatchingLabelsSelector{Selector: labels.NewSelector().Add(*req)},
@@ -166,185 +187,144 @@ func (c *Client) ListOwnedInstances(ctx context.Context, owners []string) ([]dpl
 	return list.Items, nil
 }
 
-// ListAllInstances returns every DployInstance in the configured namespace —
-// cross-owner, including pool members. Intended for admin views (the Manager
-// UI); regular users should hit ListUserInstances / ListOwnedInstances.
-func (c *Client) ListAllInstances(ctx context.Context) ([]dployv1alpha1.DployInstance, error) {
-	var list dployv1alpha1.DployInstanceList
-	if err := c.c.List(ctx, &list, client.InNamespace(c.namespace)); err != nil {
+// EnsureClaim returns the owner's live claim for a template, creating one if
+// there is none. The claim name is derived from (owner, template), so asking
+// twice yields the same environment rather than a second one.
+//
+// An expired claim left over from a previous session is replaced: it is a
+// tombstone, and the user is asking for a new environment. A *rejected* claim is
+// handed back untouched so the caller can report why the request was refused —
+// silently retrying it would turn a clear "you are over quota" into a
+// pending environment that never arrives.
+func (c *Client) EnsureClaim(
+	ctx context.Context,
+	owner string,
+	params map[string]string,
+	tmpl *dployv1alpha1.DployTemplate,
+	waitForPool bool,
+) (*dployv1alpha1.DployInstanceClaim, error) {
+	existing, err := c.GetOwnerClaim(ctx, owner, tmpl.Name)
+	if err != nil {
 		return nil, err
 	}
-	return list.Items, nil
-}
-
-// GetUserInstance returns the user's instance of a template, or nil if none.
-func (c *Client) GetUserInstance(ctx context.Context, owner, templateRef string) (*dployv1alpha1.DployInstance, error) {
-	var list dployv1alpha1.DployInstanceList
-	if err := c.c.List(ctx, &list,
-		client.InNamespace(c.namespace),
-		client.MatchingLabels{dployv1alpha1.LabelOwner: owner, dployv1alpha1.LabelTemplate: templateRef},
-	); err != nil {
-		return nil, err
-	}
-	for i := range list.Items {
-		if list.Items[i].DeletionTimestamp.IsZero() {
-			return &list.Items[i], nil
+	if existing != nil {
+		if existing.Status.Phase != dployv1alpha1.ClaimExpired {
+			return existing, nil
+		}
+		logger.Debug("Replacing expired claim", "claim", existing.Name)
+		uid := existing.UID
+		if derr := c.c.Delete(ctx, existing, client.Preconditions{UID: &uid}); derr != nil && !apierrors.IsNotFound(derr) {
+			return nil, derr
 		}
 	}
-	return nil, nil
-}
 
-// CreateOrClaim provisions an environment: it claims a warm instance for pool
-// templates, or creates a fresh on-demand instance otherwise.
-func (c *Client) CreateOrClaim(ctx context.Context, owner string, claims []byte, params map[string]string, tmpl *dployv1alpha1.DployTemplate) (*dployv1alpha1.DployInstance, error) {
-	ttl := resolveTTL(tmpl, c.config.DefaultTTL)
-	expiresAt := computeExpiry(ttl)
-
-	if tmpl.Spec.Method == dployv1alpha1.MethodPool {
-		return c.claimPooled(ctx, owner, claims, params, tmpl, ttl, expiresAt)
-	}
-
-	inst := &dployv1alpha1.DployInstance{
+	claim := &dployv1alpha1.DployInstanceClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      instanceName(owner, tmpl.Name),
+			Name:      ClaimName(owner, tmpl.Name),
 			Namespace: c.namespace,
 			Labels: map[string]string{
 				dployv1alpha1.LabelManaged:  "true",
 				dployv1alpha1.LabelOwner:    owner,
 				dployv1alpha1.LabelTemplate: tmpl.Name,
 			},
-			Annotations: map[string]string{annotationExtendCount: "0"},
 		},
-		Spec: dployv1alpha1.DployInstanceSpec{
+		Spec: dployv1alpha1.DployInstanceClaimSpec{
 			TemplateRef: tmpl.Name,
 			Owner:       owner,
-			Claims:      rawExtension(claims),
 			Params:      params,
-			TTLSeconds:  ttl,
-			ExpiresAt:   expiresAt,
+			WaitForPool: waitForPool,
+			// TTL is left at 0 on purpose: the operator resolves it from the
+			// template and the cluster defaults, and anchors the clock when it
+			// binds. The API has no say in how long an environment lives.
 		},
 	}
-	if err := c.c.Create(ctx, inst); err != nil {
+	if err := c.c.Create(ctx, claim); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// Another request for the same owner and template beat us to it.
+			return c.GetOwnerClaim(ctx, owner, tmpl.Name)
+		}
 		return nil, err
 	}
-	return inst, nil
+	return claim, nil
 }
 
-// claimPooled hands the user a warm, unclaimed pool member by stamping ownership
-// onto it. Returns ErrPoolExhausted if none are available.
-func (c *Client) claimPooled(ctx context.Context, owner string, claims []byte, params map[string]string, tmpl *dployv1alpha1.DployTemplate, ttl int64, expiresAt *metav1.Time) (*dployv1alpha1.DployInstance, error) {
-	var list dployv1alpha1.DployInstanceList
-	if err := c.c.List(ctx, &list,
-		client.InNamespace(c.namespace),
-		client.MatchingLabels{dployv1alpha1.LabelTemplate: tmpl.Name, dployv1alpha1.LabelPooled: "true"},
-	); err != nil {
-		return nil, err
-	}
-
-	for i := range list.Items {
-		inst := &list.Items[i]
-		if inst.Spec.Owner != "" || !inst.DeletionTimestamp.IsZero() {
-			continue
-		}
-		if inst.Status.Phase != dployv1alpha1.PhaseAvailable {
-			continue
-		}
-		patch := client.MergeFrom(inst.DeepCopy())
-		inst.Spec.Owner = owner
-		inst.Spec.Claims = rawExtension(claims)
-		inst.Spec.Params = params
-		inst.Spec.TTLSeconds = ttl
-		inst.Spec.ExpiresAt = expiresAt
-		if inst.Labels == nil {
-			inst.Labels = map[string]string{}
-		}
-		inst.Labels[dployv1alpha1.LabelOwner] = owner
-		if inst.Annotations == nil {
-			inst.Annotations = map[string]string{}
-		}
-		inst.Annotations[annotationExtendCount] = "0"
-		if err := c.c.Patch(ctx, inst, patch); err != nil {
-			// Lost the race to another claimer; try the next candidate.
-			logger.Debug("Pool claim race, retrying next candidate", "instance", inst.Name, "error", err)
-			continue
-		}
-		return inst, nil
-	}
-	return nil, ErrPoolExhausted
-}
-
-// ExtendInstance pushes an instance's expiry forward by extendSeconds, enforcing
-// maxExtends (<= 0 means unlimited). Returns the new expiry time.
-func (c *Client) ExtendInstance(ctx context.Context, inst *dployv1alpha1.DployInstance, extendSeconds, maxExtends int) (time.Time, error) {
-	if inst.Spec.TTLSeconds == -1 || inst.Spec.ExpiresAt == nil {
+// ExtendClaim grants an environment more time by raising the claim's requested
+// lifetime. There is no extend verb and no new deadline to compute: the operator
+// derives the expiry from the binding anchor, so an extension is one patch.
+func (c *Client) ExtendClaim(ctx context.Context, claim *dployv1alpha1.DployInstanceClaim, extendSeconds int) (time.Time, error) {
+	granted := claim.Status.TTLSeconds
+	if granted == -1 {
 		return time.Time{}, ErrUnlimitedTTL
 	}
-	count := ExtendCount(inst)
-	if maxExtends > 0 && count >= maxExtends {
-		return time.Time{}, fmt.Errorf("%w (%d)", ErrMaxExtends, maxExtends)
+	if claim.Status.BoundAt == nil || granted == 0 {
+		return time.Time{}, ErrNotBound
 	}
 
-	newExpires := inst.Spec.ExpiresAt.Add(time.Duration(extendSeconds) * time.Second)
-	patch := client.MergeFrom(inst.DeepCopy())
-	t := metav1.NewTime(newExpires)
-	inst.Spec.ExpiresAt = &t
-	if inst.Annotations == nil {
-		inst.Annotations = map[string]string{}
+	maxTTL := claim.Status.MaxTTLSeconds
+	if maxTTL > 0 && granted >= maxTTL {
+		return time.Time{}, fmt.Errorf("%w (%s)", ErrMaxExtends, (time.Duration(maxTTL) * time.Second).String())
 	}
-	inst.Annotations[annotationExtendCount] = strconv.Itoa(count + 1)
-	if err := c.c.Patch(ctx, inst, patch); err != nil {
+	wanted := granted + int64(extendSeconds)
+	if maxTTL > 0 && wanted > maxTTL {
+		wanted = maxTTL
+	}
+
+	patch := client.MergeFrom(claim.DeepCopy())
+	claim.Spec.TTLSeconds = wanted
+	if err := c.c.Patch(ctx, claim, patch); err != nil {
 		return time.Time{}, err
 	}
-	return newExpires, nil
+	return claim.Status.BoundAt.Add(time.Duration(wanted) * time.Second), nil
 }
 
-// DeleteInstance deletes the CR; the operator's finalizer tears down the
-// HelmRelease, source and workload namespace.
-func (c *Client) DeleteInstance(ctx context.Context, inst *dployv1alpha1.DployInstance) error {
-	return c.c.Delete(ctx, inst)
+// DeleteClaim removes the request. The claim owns its DployInstance, so the
+// cluster garbage-collects the environment and the operator's finalizer unwinds
+// the workload behind it.
+func (c *Client) DeleteClaim(ctx context.Context, claim *dployv1alpha1.DployInstanceClaim) error {
+	return c.c.Delete(ctx, claim)
 }
 
 // --- helpers ---
 
-// ExtendCount reads the API-managed extend counter from instance metadata.
-func ExtendCount(inst *dployv1alpha1.DployInstance) int {
-	if v := inst.Annotations[annotationExtendCount]; v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return 0
-}
-
-// resolveTTL picks the template TTL if set (including -1 for unlimited),
-// otherwise the API default.
-func resolveTTL(tmpl *dployv1alpha1.DployTemplate, defaultSeconds int) int64 {
-	if tmpl.Spec.TTL != nil && tmpl.Spec.TTL.Seconds != 0 {
-		return tmpl.Spec.TTL.Seconds
-	}
-	return int64(defaultSeconds)
-}
-
-func computeExpiry(ttlSeconds int64) *metav1.Time {
-	if ttlSeconds <= 0 { // unlimited (-1) or unset
-		return nil
-	}
-	t := metav1.NewTime(time.Now().Add(time.Duration(ttlSeconds) * time.Second))
-	return &t
-}
-
-func rawExtension(b []byte) *runtime.RawExtension {
-	if len(b) == 0 {
-		return nil
-	}
-	return &runtime.RawExtension{Raw: b}
-}
-
-// instanceName builds the deterministic, one-per-(owner,template) CR name.
-func instanceName(owner, template string) string {
+// ClaimName builds the deterministic, one-per-(owner, template) claim name. It is
+// what makes "give me this environment" idempotent.
+func ClaimName(owner, template string) string {
 	name := fmt.Sprintf("%s-%s", owner, template)
-	if len(name) > maxInstanceNameLen {
-		name = strings.Trim(name[:maxInstanceNameLen], "-")
+	if len(name) > maxClaimNameLen {
+		name = strings.Trim(name[:maxClaimNameLen], "-")
 	}
 	return name
+}
+
+// ExtendCount reconstructs how many extensions an environment has had, from the
+// granted lifetime and the template's extend step. The operator tracks a
+// lifetime, not a counter, so this exists purely to keep the UI's "3/5 extends"
+// affordance meaningful.
+func ExtendCount(claim *dployv1alpha1.DployInstanceClaim, baseTTL, extendSeconds int64) int {
+	granted := claim.Status.TTLSeconds
+	if granted <= 0 || extendSeconds <= 0 || granted <= baseTTL {
+		return 0
+	}
+	return int((granted - baseTTL) / extendSeconds)
+}
+
+// FilterClaims narrows a JWT down to the claims a deployment chose to forward,
+// flattening multi-valued ones (e.g. groups) into a comma-separated string.
+// Anything unlisted never leaves the API server.
+func FilterClaims(claims map[string]any, allow []string) map[string]string {
+	if len(claims) == 0 || len(allow) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for _, key := range allow {
+		vals := claimValues(claims[key])
+		if len(vals) == 0 {
+			continue
+		}
+		out[key] = strings.Join(vals, ",")
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

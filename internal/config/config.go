@@ -23,8 +23,14 @@ type Config struct {
 	OIDCRedirectURL  string
 	OIDCScopes       []string // OAuth scopes requested at authorization
 
-	// Kubernetes: the namespace where DployTemplate and DployInstance CRs live.
+	// Kubernetes: the namespace where DployTemplate and DployInstanceClaim CRs live.
 	Namespace string
+
+	// ForwardedClaims names the JWT claims the API copies into a claim's
+	// spec.params, where value templates see them as .Claims/.Params. Everything
+	// else in the token is dropped at the door: the operator has no business
+	// reading a bearer token, and nothing unlisted reaches etcd.
+	ForwardedClaims []string
 
 	// Defaults — fallbacks used only when a DployTemplate omits the value.
 	MaxEnvironmentsPerUser int
@@ -77,7 +83,8 @@ func Load() (*Config, error) {
 		OIDCScopes: getEnvAsList("OIDC_SCOPES", []string{"openid", "profile", "email"}),
 
 		// Kubernetes
-		Namespace: getEnv("DPLOY_NAMESPACE", "dploy-system"),
+		Namespace:       getEnv("DPLOY_NAMESPACE", "dploy-system"),
+		ForwardedClaims: getEnvAsList("FORWARDED_CLAIMS", []string{"sub", "preferred_username", "email", "name", "groups"}),
 
 		// Defaults
 		MaxEnvironmentsPerUser: getEnvAsInt("MAX_ENVIRONMENTS_PER_USER", 5),

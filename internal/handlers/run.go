@@ -4,13 +4,13 @@
 package handlers
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 
 	dployv1alpha1 "github.com/AYDEV-FR/dploy/api/v1alpha1"
 	"github.com/AYDEV-FR/dploy/internal/auth"
@@ -29,13 +29,15 @@ func NewRunHandler(kubeClient *kube.Client, cfg *config.Config) *RunHandler {
 	return &RunHandler{kubeClient: kubeClient, config: cfg}
 }
 
-// CreateEnvironment provisions an environment from a template, or returns the
-// user's existing one. Pool templates claim a warm instance; others create one.
+// CreateEnvironment records the request as a DployInstanceClaim and hands back
+// whatever the operator has made of it so far. Binding, quota and TTL are the
+// operator's decisions; this handler validates the requester and writes one CR.
 //
 //	@Summary		Create or get environment
 //	@Tags			run
 //	@Security		BearerAuth
-//	@Param			env	path	string	true	"Template name"
+//	@Param			env		path	string	true	"Template name"
+//	@Param			wait	query	bool	false	"Wait for a warm pool instance instead of provisioning one on demand (default true)"
 //	@Produce		json
 //	@Success		200	{object}	models.RunEnvironmentResponse
 //	@Router			/run/{env} [get]
@@ -71,42 +73,26 @@ func (h *RunHandler) CreateEnvironment(c *fiber.Ctx) error {
 		})
 	}
 
-	// Return the existing instance if this owner already runs this template.
-	existing, err := h.kubeClient.GetUserInstance(c.Context(), owner, envName)
-	if err != nil {
-		return internalError(c, err)
-	}
-	if existing != nil {
-		return respondInstance(c, existing)
-	}
-
-	// Enforce the per-owner quota.
-	insts, err := h.kubeClient.ListUserInstances(c.Context(), owner)
-	if err != nil {
-		return internalError(c, err)
-	}
-	limit := h.userLimit(tmpl)
-	if len(insts) >= limit {
-		return c.Status(fiber.StatusForbidden).JSON(models.ErrorResponse{
-			Error: fmt.Sprintf("Maximum %d environments allowed", limit),
-		})
-	}
-
-	params, err := buildParams(c, tmpl)
+	params, err := h.buildParams(c, tmpl)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Error: err.Error()})
 	}
 
-	inst, err := h.kubeClient.CreateOrClaim(c.Context(), owner, claimsJSON(c), params, tmpl)
+	// An empty pool parks the request by default rather than provisioning around
+	// it — the point of a pool is that environments start warm. `?wait=false`
+	// opts into an on-demand instance instead.
+	waitForPool := c.QueryBool("wait", true)
+
+	claim, err := h.kubeClient.EnsureClaim(c.Context(), owner, params, tmpl, waitForPool)
 	if err != nil {
-		if errors.Is(err, kube.ErrPoolExhausted) {
-			return c.Status(fiber.StatusServiceUnavailable).JSON(models.ErrorResponse{Error: err.Error()})
-		}
 		return internalError(c, err)
 	}
+	if claim.Status.Phase == dployv1alpha1.ClaimRejected {
+		return respondRejected(c, claim)
+	}
 
-	logger.Info("Provisioned environment", "user", username, "env", envName, "method", tmpl.Spec.Method)
-	return respondInstance(c, inst)
+	logger.Info("Requested environment", "user", username, "env", envName, "claim", claim.Name)
+	return respondClaim(c, claim)
 }
 
 // GetStatus returns the status of a user's environment.
@@ -119,37 +105,26 @@ func (h *RunHandler) CreateEnvironment(c *fiber.Ctx) error {
 //	@Success		200	{object}	models.StatusResponse
 //	@Router			/api/run/{env}/status [get]
 func (h *RunHandler) GetStatus(c *fiber.Ctx) error {
-	username, ok := c.Locals(auth.UserContextKey).(string)
-	if !ok {
-		return unauthorized(c)
-	}
-	envName := c.Params("env")
-
-	owner, ok := h.resolveOwner(c, envName, username)
-	if !ok {
-		return notFound(c, fmt.Sprintf("environment %q not found", envName))
-	}
-	inst, err := h.kubeClient.GetUserInstance(c.Context(), owner, envName)
+	claim, err := h.requireClaim(c)
 	if err != nil {
-		return internalError(c, err)
-	}
-	if inst == nil {
-		return notFound(c, fmt.Sprintf("environment %q not found", envName))
+		return err
 	}
 
 	return c.JSON(models.StatusResponse{
-		UUID:              inst.Status.UUID,
-		Status:            instanceStatus(inst),
-		URL:               inst.Status.URL,
-		ExpiresAt:         instanceExpiresAt(inst),
-		Owner:             inst.Spec.Owner,
-		Shared:            isShared(c, inst.Spec.Owner),
-		ConnectionType:    string(inst.Status.ConnectionType),
-		ConnectionMessage: inst.Status.ConnectionMessage,
+		UUID:              claim.Status.UUID,
+		Status:            claimStatus(claim),
+		URL:               claim.Status.ConnectionURL,
+		ExpiresAt:         claimExpiresAt(claim),
+		Owner:             claim.Spec.Owner,
+		Shared:            isShared(c, claim.Spec.Owner),
+		Message:           claimMessage(claim),
+		ConnectionType:    string(claim.Status.ConnectionType),
+		ConnectionMessage: claim.Status.ConnectionMessage,
 	})
 }
 
-// ExtendTTL pushes a user's environment expiry forward by the configured amount.
+// ExtendTTL grants a user's environment more time by raising the claim's
+// requested lifetime; the operator recomputes the expiry from the binding.
 //
 //	@Summary		Extend environment TTL
 //	@Tags			run
@@ -159,36 +134,21 @@ func (h *RunHandler) GetStatus(c *fiber.Ctx) error {
 //	@Success		200	{object}	models.ExtendResponse
 //	@Router			/api/run/{env}/extend [post]
 func (h *RunHandler) ExtendTTL(c *fiber.Ctx) error {
-	username, ok := c.Locals(auth.UserContextKey).(string)
-	if !ok {
-		return unauthorized(c)
+	claim, err := h.requireClaim(c)
+	if err != nil {
+		return err
 	}
 	envName := c.Params("env")
 
-	owner, ok := h.resolveOwner(c, envName, username)
-	if !ok {
-		return notFound(c, fmt.Sprintf("environment %q not found", envName))
-	}
-	inst, err := h.kubeClient.GetUserInstance(c.Context(), owner, envName)
-	if err != nil {
-		return internalError(c, err)
-	}
-	if inst == nil {
-		return notFound(c, fmt.Sprintf("environment %q not found", envName))
-	}
-
 	extendSeconds := h.config.ExtendTTL
-	maxExtends := 0
-	if tmpl, terr := h.kubeClient.GetTemplate(c.Context(), envName); terr == nil && tmpl.Spec.TTL != nil {
-		if tmpl.Spec.TTL.ExtendSeconds > 0 {
-			extendSeconds = int(tmpl.Spec.TTL.ExtendSeconds)
-		}
-		maxExtends = tmpl.Spec.TTL.MaxExtends
+	if tmpl, terr := h.kubeClient.GetTemplate(c.Context(), envName); terr == nil &&
+		tmpl.Spec.TTL != nil && tmpl.Spec.TTL.ExtendSeconds > 0 {
+		extendSeconds = int(tmpl.Spec.TTL.ExtendSeconds)
 	}
 
-	newExpires, err := h.kubeClient.ExtendInstance(c.Context(), inst, extendSeconds, maxExtends)
+	newExpires, err := h.kubeClient.ExtendClaim(c.Context(), claim, extendSeconds)
 	switch {
-	case errors.Is(err, kube.ErrUnlimitedTTL):
+	case errors.Is(err, kube.ErrUnlimitedTTL), errors.Is(err, kube.ErrNotBound):
 		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Error: err.Error()})
 	case errors.Is(err, kube.ErrMaxExtends):
 		return c.Status(fiber.StatusConflict).JSON(models.ErrorResponse{Error: err.Error()})
@@ -196,12 +156,12 @@ func (h *RunHandler) ExtendTTL(c *fiber.Ctx) error {
 		return internalError(c, err)
 	}
 
-	logger.Info("Extended TTL", "user", username, "env", envName, "newExpires", newExpires)
+	logger.Info("Extended TTL", "env", envName, "claim", claim.Name, "newExpires", newExpires)
 	return c.JSON(models.ExtendResponse{ExpiresAt: newExpires.UTC().Format(time.RFC3339)})
 }
 
-// DeleteEnvironment deletes a user's environment. The operator cleans up the
-// underlying workload via its finalizer.
+// DeleteEnvironment deletes a user's environment by deleting its claim. The
+// claim owns the instance, so the cluster cascades the teardown.
 //
 //	@Summary		Delete environment
 //	@Tags			run
@@ -210,37 +170,40 @@ func (h *RunHandler) ExtendTTL(c *fiber.Ctx) error {
 //	@Success		204	"No Content"
 //	@Router			/api/run/{env} [delete]
 func (h *RunHandler) DeleteEnvironment(c *fiber.Ctx) error {
+	claim, err := h.requireClaim(c)
+	if err != nil {
+		return err
+	}
+
+	if derr := h.kubeClient.DeleteClaim(c.Context(), claim); derr != nil {
+		return internalError(c, derr)
+	}
+
+	logger.Info("Deleted environment", "env", c.Params("env"), "claim", claim.Name)
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// requireClaim resolves the requester's claim for the path's environment,
+// returning a ready-to-send fiber error when there is none.
+func (h *RunHandler) requireClaim(c *fiber.Ctx) (*dployv1alpha1.DployInstanceClaim, error) {
 	username, ok := c.Locals(auth.UserContextKey).(string)
 	if !ok {
-		return unauthorized(c)
+		return nil, unauthorized(c)
 	}
 	envName := c.Params("env")
 
 	owner, ok := h.resolveOwner(c, envName, username)
 	if !ok {
-		return notFound(c, fmt.Sprintf("environment %q not found", envName))
+		return nil, notFound(c, fmt.Sprintf("environment %q not found", envName))
 	}
-	inst, err := h.kubeClient.GetUserInstance(c.Context(), owner, envName)
+	claim, err := h.kubeClient.GetOwnerClaim(c.Context(), owner, envName)
 	if err != nil {
-		return internalError(c, err)
+		return nil, internalError(c, err)
 	}
-	if inst == nil {
-		return notFound(c, fmt.Sprintf("environment %q not found", envName))
+	if claim == nil {
+		return nil, notFound(c, fmt.Sprintf("environment %q not found", envName))
 	}
-
-	if err := h.kubeClient.DeleteInstance(c.Context(), inst); err != nil {
-		return internalError(c, err)
-	}
-
-	logger.Info("Deleted environment", "user", username, "env", envName)
-	return c.SendStatus(fiber.StatusNoContent)
-}
-
-func (h *RunHandler) userLimit(tmpl *dployv1alpha1.DployTemplate) int {
-	if tmpl.Spec.MaxInstancesPerUser != nil && *tmpl.Spec.MaxInstancesPerUser > 0 {
-		return *tmpl.Spec.MaxInstancesPerUser
-	}
-	return h.config.MaxEnvironmentsPerUser
+	return claim, nil
 }
 
 // resolveOwner resolves the owner key for an environment using the template's
@@ -253,6 +216,33 @@ func (h *RunHandler) resolveOwner(c *fiber.Ctx, env, username string) (string, b
 	return kube.ResolveOwner(claimsMap(c), claim, username)
 }
 
+// buildParams assembles the request context handed to the operator: the JWT
+// claims this deployment forwards, overlaid with the template's declared
+// parameters. Declared parameters win — an explicit request beats an identity
+// attribute that happens to share its name.
+func (h *RunHandler) buildParams(c *fiber.Ctx, tmpl *dployv1alpha1.DployTemplate) (map[string]string, error) {
+	params := kube.FilterClaims(claimsMap(c), h.config.ForwardedClaims)
+	if params == nil {
+		params = map[string]string{}
+	}
+	for _, p := range tmpl.Spec.Parameters {
+		v := c.Query(p.Name)
+		if v == "" {
+			v = p.Default
+		}
+		if v == "" && p.Required {
+			return nil, fmt.Errorf("missing required parameter %q", p.Name)
+		}
+		if v != "" {
+			params[p.Name] = v
+		}
+	}
+	if len(params) == 0 {
+		return nil, nil
+	}
+	return params, nil
+}
+
 // claimsMap returns the requester's JWT claims from the request context.
 func claimsMap(c *fiber.Ctx) map[string]any {
 	if m, ok := c.Locals(auth.ClaimsContextKey).(map[string]any); ok && m != nil {
@@ -263,21 +253,42 @@ func claimsMap(c *fiber.Ctx) map[string]any {
 
 // --- shared handler helpers ---
 
-func respondInstance(c *fiber.Ctx, inst *dployv1alpha1.DployInstance) error {
+func respondClaim(c *fiber.Ctx, claim *dployv1alpha1.DployInstanceClaim) error {
 	return c.JSON(models.RunEnvironmentResponse{
-		UUID:              inst.Status.UUID,
-		Status:            instanceStatus(inst),
-		URL:               inst.Status.URL,
-		ExpiresAt:         instanceExpiresAt(inst),
-		Owner:             inst.Spec.Owner,
-		Shared:            isShared(c, inst.Spec.Owner),
-		ConnectionType:    string(inst.Status.ConnectionType),
-		ConnectionMessage: inst.Status.ConnectionMessage,
+		UUID:              claim.Status.UUID,
+		Status:            claimStatus(claim),
+		URL:               claim.Status.ConnectionURL,
+		ExpiresAt:         claimExpiresAt(claim),
+		Owner:             claim.Spec.Owner,
+		Shared:            isShared(c, claim.Spec.Owner),
+		Message:           claimMessage(claim),
+		ConnectionType:    string(claim.Status.ConnectionType),
+		ConnectionMessage: claim.Status.ConnectionMessage,
 	})
 }
 
-// isShared reports whether the instance is owned by an identity other than the
-// requester's personal one (i.e. a team/group-owned, shared environment).
+// respondRejected turns the operator's verdict into an HTTP status. The reason
+// on the Bound condition is the contract: it says whether the request was
+// refused because of the requester (quota) or the catalog (missing, disabled).
+func respondRejected(c *fiber.Ctx, claim *dployv1alpha1.DployInstanceClaim) error {
+	msg := claimMessage(claim)
+	if msg == "" {
+		msg = "the request was rejected"
+	}
+	status := fiber.StatusConflict
+	if cond := apimeta.FindStatusCondition(claim.Status.Conditions, dployv1alpha1.ConditionBound); cond != nil {
+		switch cond.Reason {
+		case "QuotaExceeded":
+			status = fiber.StatusForbidden
+		case "TemplateNotFound", "TemplateDisabled":
+			status = fiber.StatusNotFound
+		}
+	}
+	return c.Status(status).JSON(models.ErrorResponse{Error: msg})
+}
+
+// isShared reports whether the environment is owned by an identity other than
+// the requester's personal one (i.e. a team/group-owned, shared environment).
 func isShared(c *fiber.Ctx, owner string) bool {
 	if owner == "" {
 		return false
@@ -287,13 +298,28 @@ func isShared(c *fiber.Ctx, owner string) bool {
 	return owner != self
 }
 
-// instanceStatus maps the instance phase/health onto the status strings the web
-// UI already understands.
-func instanceStatus(inst *dployv1alpha1.DployInstance) string {
-	switch inst.Status.Phase {
+// claimStatus maps a claim onto the status strings the web UI already
+// understands. A bound claim reports its instance's health; the other phases are
+// states the instance never had a name for.
+func claimStatus(claim *dployv1alpha1.DployInstanceClaim) string {
+	switch claim.Status.Phase {
+	case dployv1alpha1.ClaimBound:
+		return instancePhaseStatus(claim.Status.InstancePhase, claim.Status.Health)
+	case dployv1alpha1.ClaimRejected:
+		return "Degraded"
+	case dployv1alpha1.ClaimExpired:
+		return "Deleting"
+	default: // Pending or not reconciled yet
+		return "pending"
+	}
+}
+
+// instancePhaseStatus maps an instance phase/health pair onto a UI status string.
+func instancePhaseStatus(phase dployv1alpha1.InstancePhase, health string) string {
+	switch phase {
 	case dployv1alpha1.PhaseReady, dployv1alpha1.PhaseClaimed, dployv1alpha1.PhaseAvailable:
-		if inst.Status.Health != "" {
-			return inst.Status.Health
+		if health != "" {
+			return health
 		}
 		return "Healthy"
 	case dployv1alpha1.PhaseProvisioning:
@@ -307,49 +333,25 @@ func instanceStatus(inst *dployv1alpha1.DployInstance) string {
 	}
 }
 
-// instanceExpiresAt prefers the operator-observed expiry, falling back to the
-// requested one before the first reconcile. Empty means unlimited.
-func instanceExpiresAt(inst *dployv1alpha1.DployInstance) string {
-	t := inst.Status.ExpiresAt
-	if t == nil {
-		t = inst.Spec.ExpiresAt
-	}
-	if t == nil {
+// claimExpiresAt formats the operator-anchored expiry. Empty means unlimited, or
+// not bound yet.
+func claimExpiresAt(claim *dployv1alpha1.DployInstanceClaim) string {
+	if claim.Status.ExpiresAt == nil {
 		return ""
 	}
-	return t.UTC().Format(time.RFC3339)
+	return claim.Status.ExpiresAt.UTC().Format(time.RFC3339)
 }
 
-// claimsJSON marshals the requester's JWT claims for DployInstance.Spec.Claims.
-func claimsJSON(c *fiber.Ctx) []byte {
-	raw, ok := c.Locals(auth.ClaimsContextKey).(map[string]any)
-	if !ok || len(raw) == 0 {
-		return nil
+// claimMessage surfaces why an environment is not (or no longer) running, so a
+// pending or refused request explains itself instead of just spinning.
+func claimMessage(claim *dployv1alpha1.DployInstanceClaim) string {
+	if claim.Status.Phase == dployv1alpha1.ClaimBound {
+		return ""
 	}
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return nil
+	if cond := apimeta.FindStatusCondition(claim.Status.Conditions, dployv1alpha1.ConditionBound); cond != nil {
+		return cond.Message
 	}
-	return b
-}
-
-// buildParams collects the template's declared parameters from the query string,
-// applying defaults and enforcing required ones.
-func buildParams(c *fiber.Ctx, tmpl *dployv1alpha1.DployTemplate) (map[string]string, error) {
-	params := map[string]string{}
-	for _, p := range tmpl.Spec.Parameters {
-		v := c.Query(p.Name)
-		if v == "" {
-			v = p.Default
-		}
-		if v == "" && p.Required {
-			return nil, fmt.Errorf("missing required parameter %q", p.Name)
-		}
-		if v != "" {
-			params[p.Name] = v
-		}
-	}
-	return params, nil
+	return ""
 }
 
 func unauthorized(c *fiber.Ctx) error {

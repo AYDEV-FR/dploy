@@ -1,10 +1,16 @@
-.PHONY: help build build-go build-operator test docker-build docker-build-operator docker-load logs port-forward clean frontend-install frontend-build frontend-dev manifests generate install uninstall
+.PHONY: help build build-go build-operator test envtest docker-build docker-build-operator docker-load logs port-forward clean frontend-install frontend-build frontend-dev manifests generate install uninstall
 
 # Detect container runtime
 CONTAINER_RUNTIME := $(shell command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && echo docker || echo podman)
 
 # Operator codegen (controller-gen is run via `go run` so no global install is required)
 CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.1
+
+# envtest control-plane binaries for the controller suite. The version tracks the
+# k8s.io/* libraries in go.mod; setup-envtest tracks controller-runtime's branch.
+ENVTEST_K8S_VERSION ?= 1.34.x
+SETUP_ENVTEST ?= go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.24
+ENVTEST_DIR := $(CURDIR)/bin/envtest
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -46,8 +52,11 @@ uninstall: ## Remove CRDs from the current kube context
 run: ## Run locally (requires env vars)
 	go run ./cmd/api/main.go
 
-test: ## Run tests
-	go test -v ./...
+envtest: ## Download the envtest control-plane binaries into bin/envtest
+	$(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_DIR) -p path
+
+test: envtest ## Run tests (the controller suite needs the envtest binaries)
+	go test ./...
 
 # Docker/Podman
 docker-build: ## Build API container image

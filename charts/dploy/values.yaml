@@ -1,8 +1,10 @@
 # Dploy Helm Chart Values
 #
 # The chart deploys two components:
-#   * the API server (GoFiber + OIDC) — reads the catalog and creates instances
-#   * the operator — reconciles DployInstance/DployTemplate into Flux resources
+#   * the API server (GoFiber + OIDC) — reads the catalog and files environment
+#     requests as DployInstanceClaim resources
+#   * the operator — binds claims, then reconciles DployInstance/DployTemplate
+#     into Flux resources
 # CRDs are installed from the chart's crds/ directory.
 
 # ---------------------------------------------------------------------------
@@ -35,11 +37,13 @@ serviceAccount:
 
 # Dploy API configuration
 config:
-  # Namespace where DployTemplate/DployInstance CRs live.
+  # Namespace where the dploy CRs live.
   # Empty string defaults to the release namespace.
   namespace: ""
+  # Quota shown in the UI. The cap the operator ENFORCES comes from
+  # OperatorConfig.defaults.maxInstancesPerUser (or a template's override).
   maxEnvironmentsPerUser: 5
-  defaultTTL: 86400 # 24h, fallback when a template omits TTL
+  defaultTTL: 86400 # 24h, shown in the UI; the operator resolves the real one
   extendTTL: 7200   # 2h, fallback extension granted per /extend
   serverHost: "0.0.0.0"
   serverPort: 8080
@@ -67,6 +71,17 @@ auth:
   adminClaim: is_admin
   adminValue: "true"
   jwtUsernameClaim: preferred_username
+
+  # The only JWT claims copied out of the token into a DployInstanceClaim's
+  # spec.params, where valuesTemplate reads them as `.Params`. Everything else in
+  # the token stops at the API server — the operator never sees a bearer token.
+  # Add whatever your charts template on (e.g. a "team" or "student_id" claim).
+  forwardedClaims:
+    - sub
+    - preferred_username
+    - email
+    - name
+    - groups
   oidcClientID: dploy
   oidcClientSecret: ""
 

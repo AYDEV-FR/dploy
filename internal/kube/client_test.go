@@ -4,72 +4,139 @@
 package kube
 
 import (
+	"errors"
 	"testing"
-	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	dployv1alpha1 "github.com/AYDEV-FR/dploy/api/v1alpha1"
 )
 
-func TestInstanceName(t *testing.T) {
-	if got := instanceName("alice", "webterm"); got != "alice-webterm" {
-		t.Errorf("instanceName = %q", got)
+func TestClaimName(t *testing.T) {
+	if got := ClaimName("alice", "webterm"); got != "alice-webterm" {
+		t.Errorf("ClaimName = %q", got)
 	}
-	long := instanceName("alice", string(make([]byte, 300)))
-	if len(long) > maxInstanceNameLen {
+	long := ClaimName("alice", string(make([]byte, 300)))
+	if len(long) > maxClaimNameLen {
 		t.Errorf("name too long: %d", len(long))
 	}
 }
 
-func TestResolveTTL(t *testing.T) {
+func TestExtendCount(t *testing.T) {
+	claim := func(granted int64) *dployv1alpha1.DployInstanceClaim {
+		c := &dployv1alpha1.DployInstanceClaim{}
+		c.Status.TTLSeconds = granted
+		return c
+	}
 	cases := []struct {
-		name string
-		tmpl *dployv1alpha1.DployTemplate
-		want int64
+		name                 string
+		granted, base, extra int64
+		want                 int
 	}{
-		{"no template ttl uses default", &dployv1alpha1.DployTemplate{}, 86400},
-		{"template ttl wins", withTTL(100), 100},
-		{"unlimited (-1) honored", withTTL(-1), -1},
+		{"never extended", 3600, 3600, 1800, 0},
+		{"one extension", 5400, 3600, 1800, 1},
+		{"three extensions", 9000, 3600, 1800, 3},
+		{"unlimited has no count", -1, 3600, 1800, 0},
+		{"not bound yet", 0, 3600, 1800, 0},
+		{"no extend step configured", 5400, 3600, 0, 0},
+		{"granted below base (template shrank)", 1800, 3600, 1800, 0},
 	}
 	for _, tc := range cases {
-		if got := resolveTTL(tc.tmpl, 86400); got != tc.want {
-			t.Errorf("%s: resolveTTL = %d, want %d", tc.name, got, tc.want)
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ExtendCount(claim(tc.granted), tc.base, tc.extra); got != tc.want {
+				t.Errorf("ExtendCount = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFilterClaims(t *testing.T) {
+	claims := map[string]any{
+		"sub":                "abc-123",
+		"email":              "alice@example.com",
+		"groups":             []any{"devs", "admins"},
+		"unlisted_secret":    "do-not-forward",
+		"empty":              "",
+		"preferred_username": "alice",
+	}
+	got := FilterClaims(claims, []string{"sub", "email", "groups", "empty", "absent"})
+
+	want := map[string]string{
+		"sub":    "abc-123",
+		"email":  "alice@example.com",
+		"groups": "devs,admins", // multi-valued claims are flattened
+	}
+	if len(got) != len(want) {
+		t.Fatalf("FilterClaims = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("FilterClaims[%q] = %q, want %q", k, got[k], v)
+		}
+	}
+	// The whole point: an unlisted claim never reaches the cluster.
+	if _, leaked := got["unlisted_secret"]; leaked {
+		t.Error("an unlisted claim was forwarded")
+	}
+
+	if FilterClaims(claims, nil) != nil {
+		t.Error("no allowlist should forward nothing")
+	}
+	if FilterClaims(nil, []string{"sub"}) != nil {
+		t.Error("no claims should forward nothing")
+	}
+	if FilterClaims(map[string]any{"a": "b"}, []string{"absent"}) != nil {
+		t.Error("no matching claim should yield nil, not an empty map")
+	}
+}
+
+func TestClaimIsActive(t *testing.T) {
+	for phase, want := range map[dployv1alpha1.ClaimPhase]bool{
+		dployv1alpha1.ClaimPending:  true,
+		dployv1alpha1.ClaimBound:    true,
+		dployv1alpha1.ClaimRejected: false,
+		dployv1alpha1.ClaimExpired:  false,
+		"":                          true, // not reconciled yet — assume it will hold one
+	} {
+		c := &dployv1alpha1.DployInstanceClaim{}
+		c.Status.Phase = phase
+		if got := c.IsActive(); got != want {
+			t.Errorf("phase %q: IsActive = %v, want %v", phase, got, want)
 		}
 	}
 }
 
-func withTTL(seconds int64) *dployv1alpha1.DployTemplate {
-	return &dployv1alpha1.DployTemplate{
-		Spec: dployv1alpha1.DployTemplateSpec{TTL: &dployv1alpha1.TTLSpec{Seconds: seconds}},
-	}
+// boundClaim builds a claim the operator has already bound, with the given
+// granted and maximum lifetimes.
+func boundClaim(granted, maxTTL int64) *dployv1alpha1.DployInstanceClaim {
+	c := &dployv1alpha1.DployInstanceClaim{}
+	c.Status.Phase = dployv1alpha1.ClaimBound
+	now := metav1.Now()
+	c.Status.BoundAt = &now
+	c.Status.TTLSeconds = granted
+	c.Status.MaxTTLSeconds = maxTTL
+	return c
 }
 
-func TestComputeExpiry(t *testing.T) {
-	if computeExpiry(-1) != nil {
-		t.Error("unlimited TTL should yield nil expiry")
+func TestExtendClaimPreconditions(t *testing.T) {
+	// These are the checks that don't need a cluster: everything that decides
+	// whether the patch is even legal.
+	cases := []struct {
+		name  string
+		claim *dployv1alpha1.DployInstanceClaim
+		want  error
+	}{
+		{"unlimited needs no extension", boundClaim(-1, -1), ErrUnlimitedTTL},
+		{"unbound has no clock to extend", &dployv1alpha1.DployInstanceClaim{}, ErrNotBound},
+		{"already at the template ceiling", boundClaim(1200, 1200), ErrMaxExtends},
 	}
-	if computeExpiry(0) != nil {
-		t.Error("zero TTL should yield nil expiry")
-	}
-	exp := computeExpiry(3600)
-	if exp == nil {
-		t.Fatal("positive TTL should yield an expiry")
-	}
-	if d := time.Until(exp.Time); d < 59*time.Minute || d > 61*time.Minute {
-		t.Errorf("expiry ~1h off: %s", d)
-	}
-}
-
-func TestExtendCount(t *testing.T) {
-	inst := &dployv1alpha1.DployInstance{}
-	if ExtendCount(inst) != 0 {
-		t.Error("missing annotation should be 0")
-	}
-	inst.Annotations = map[string]string{annotationExtendCount: "3"}
-	if ExtendCount(inst) != 3 {
-		t.Error("expected 3")
-	}
-	inst.Annotations[annotationExtendCount] = "garbage"
-	if ExtendCount(inst) != 0 {
-		t.Error("unparseable annotation should be 0")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// A nil client is safe here: every case must fail before any API call.
+			c := &Client{}
+			if _, err := c.ExtendClaim(t.Context(), tc.claim, 600); !errors.Is(err, tc.want) {
+				t.Errorf("got %v, want %v", err, tc.want)
+			}
+		})
 	}
 }

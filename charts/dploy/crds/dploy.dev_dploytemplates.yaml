@@ -254,15 +254,13 @@ spec:
               rule: '!has(self.method) || self.method != ''pool'' || !has(self.parameters)
                 || size(self.parameters) == 0'
             - message: 'pool templates must be anonymous: valuesTemplate cannot reference
-                .Claims, .Params or .Owner'
+                .Params or .Owner'
               rule: '!has(self.method) || self.method != ''pool'' || !has(self.valuesTemplate)
-                || (!self.valuesTemplate.contains(''.Claims'') && !self.valuesTemplate.contains(''.Params'')
-                && !self.valuesTemplate.contains(''.Owner''))'
+                || (!self.valuesTemplate.contains(''.Params'') && !self.valuesTemplate.contains(''.Owner''))'
             - message: 'pool templates must be anonymous: connectionMessageTemplate
-                cannot reference .Claims, .Params or .Owner'
+                cannot reference .Params or .Owner'
               rule: '!has(self.method) || self.method != ''pool'' || !has(self.connectionMessageTemplate)
-                || (!self.connectionMessageTemplate.contains(''.Claims'') && !self.connectionMessageTemplate.contains(''.Params'')
-                && !self.connectionMessageTemplate.contains(''.Owner''))'
+                || (!self.connectionMessageTemplate.contains(''.Params'') && !self.connectionMessageTemplate.contains(''.Owner''))'
           status:
             description: DployTemplateStatus reports pool occupancy and readiness.
             properties:

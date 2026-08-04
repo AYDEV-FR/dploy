@@ -4,16 +4,16 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: dployinstances.dploy.dev
+  name: dployinstanceclaims.dploy.dev
 spec:
   group: dploy.dev
   names:
-    kind: DployInstance
-    listKind: DployInstanceList
-    plural: dployinstances
+    kind: DployInstanceClaim
+    listKind: DployInstanceClaimList
+    plural: dployinstanceclaims
     shortNames:
-    - dinst
-    singular: dployinstance
+    - dclaim
+    singular: dployinstanceclaim
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -26,7 +26,10 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.url
+    - jsonPath: .status.instanceRef
+      name: Instance
+      type: string
+    - jsonPath: .status.connectionURL
       name: URL
       type: string
     - jsonPath: .status.expiresAt
@@ -38,8 +41,9 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: DployInstance is a single deployed (or pooled) environment derived
-          from a DployTemplate.
+        description: |-
+          DployInstanceClaim is a request for one environment of a DployTemplate. It
+          owns the DployInstance it binds, so deleting the claim tears the environment down.
         properties:
           apiVersion:
             description: |-
@@ -59,49 +63,67 @@ spec:
           metadata:
             type: object
           spec:
-            description: DployInstanceSpec is the desired state of a single deployed
-              environment.
+            description: |-
+              DployInstanceClaimSpec is a request for one environment of a template.
+
+              A claim is the only object a caller (the dploy API server, or a human with
+              kubectl) needs to create: the operator binds it to a warm pool member or
+              provisions one on demand, anchors the TTL, enforces the per-owner quota and
+              projects the instance status back onto the claim.
             properties:
-              expiresAt:
-                description: ExpiresAt is the absolute expiry time. Empty for unlimited
-                  TTL or an unclaimed pool member.
-                format: date-time
-                type: string
               owner:
-                description: Owner is the sanitized username that owns this instance.
-                  Empty for an unclaimed pool member.
+                description: |-
+                  Owner is the sanitized identity key that owns the environment — a username
+                  for personal environments, or a group for team-shared ones, per the
+                  template's ownerClaim. It is the quota and listing key.
+                minLength: 1
                 type: string
               params:
                 additionalProperties:
                   type: string
                 description: |-
-                  Params is the request context exposed to value templates as `.Params`: the
-                  parameters the template declares, merged with the JWT claims the API server
-                  forwards. It is the only requester-supplied data an instance carries — the
-                  raw bearer token stops at the API and never reaches the cluster.
+                  Params is the request context handed to the template: declared request
+                  parameters merged with the JWT claim values the caller chose to forward.
+                  The API server filters the token down to this map, so a raw bearer token
+                  never reaches etcd. The operator exposes it to value templates as both
+                  `.Params` and `.Claims`.
                 type: object
-              pooled:
-                description: Pooled marks this instance as a member of a template's
-                  warm pool.
-                type: boolean
               templateRef:
                 description: TemplateRef is the name of the DployTemplate (in the
-                  same namespace) this instance derives from.
+                  same namespace) to claim from.
                 minLength: 1
                 type: string
               ttlSeconds:
-                description: TTLSeconds is the resolved initial lifetime in seconds.
-                  -1 means unlimited.
+                description: |-
+                  TTLSeconds is the requested lifetime, counted from the moment the claim is
+                  bound (not from creation). 0 falls back to the template/cluster default and
+                  -1 requests an unlimited lifetime. Extending an environment is a patch that
+                  raises this value; the operator clamps it to the template's maximum and
+                  reports the effective figure in status.
                 format: int64
                 type: integer
+              waitForPool:
+                description: |-
+                  WaitForPool controls what happens when a pool template has no warm instance
+                  left: true keeps the claim Pending until one frees up, false falls back to
+                  provisioning a fresh instance on demand.
+                type: boolean
             required:
+            - owner
             - templateRef
             type: object
           status:
-            description: DployInstanceStatus is the observed state of a deployed environment.
+            description: |-
+              DployInstanceClaimStatus is the observed state of a claim. It carries a full
+              projection of the bound instance so callers only ever watch one object.
             properties:
+              boundAt:
+                description: BoundAt is when the instance was bound. It anchors the
+                  TTL clock.
+                format: date-time
+                type: string
               conditions:
-                description: Conditions represent the latest observations of the instance's
+                description: Conditions represent the latest observations of the claim's
                   state.
                 items:
                   description: Condition contains details for one aspect of the current
@@ -161,49 +183,31 @@ spec:
               connectionMessage:
                 description: |-
                   ConnectionMessage is the rendered connection instructions when
-                  connectionType is "instructions", e.g. "ssh root@pool-abc.dploy.dev -p 22000".
+                  connectionType is "instructions".
                 type: string
               connectionType:
                 description: |-
-                  ConnectionType describes how URL/ConnectionMessage should be presented
-                  (web | instructions).
+                  ConnectionType describes how connectionURL/connectionMessage should be
+                  presented (web | instructions).
                 enum:
                 - web
                 - instructions
                 type: string
-              engine:
-                description: Engine is the engine that materialized this instance.
-                enum:
-                - argocd
-                - flux
-                type: string
-              engineRef:
-                description: EngineRef is the name of the underlying engine resource
-                  (Application or HelmRelease).
+              connectionURL:
+                description: ConnectionURL is the resolved connection target of the
+                  bound instance.
                 type: string
               expiresAt:
-                description: ExpiresAt mirrors the effective expiry observed by the
-                  controller.
+                description: |-
+                  ExpiresAt is boundAt + the effective TTL. Empty for an unlimited lifetime
+                  or a claim that is not bound yet.
                 format: date-time
                 type: string
-              extendCount:
-                description: ExtendCount is the number of times the TTL has been extended.
-                type: integer
               health:
-                description: Health mirrors the engine-reported health (e.g. Healthy,
-                  Progressing, Degraded).
+                description: Health mirrors the bound instance's engine-reported health.
                 type: string
-              namespace:
-                description: Namespace is the workload namespace created for this
-                  instance.
-                type: string
-              observedGeneration:
-                description: ObservedGeneration is the most recent generation observed
-                  by the controller.
-                format: int64
-                type: integer
-              phase:
-                description: Phase is a high-level lifecycle summary.
+              instancePhase:
+                description: InstancePhase mirrors the bound instance's phase.
                 enum:
                 - Pending
                 - Provisioning
@@ -213,17 +217,37 @@ spec:
                 - Expiring
                 - Failed
                 type: string
-              sync:
-                description: Sync mirrors the engine-reported sync state (e.g. Synced,
-                  OutOfSync).
+              instanceRef:
+                description: InstanceRef is the name of the bound DployInstance in
+                  the same namespace.
                 type: string
-              url:
+              maxTTLSeconds:
                 description: |-
-                  URL is the resolved connection target: the public ingress URL for "web"
-                  connections, or the bare host/endpoint referenced by the instructions.
+                  MaxTTLSeconds is the ceiling spec.ttlSeconds may be raised to, derived from
+                  the template's ttl.maxExtends and ttl.extendSeconds. -1 means no ceiling.
+                format: int64
+                type: integer
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is a high-level lifecycle summary.
+                enum:
+                - Pending
+                - Bound
+                - Rejected
+                - Expired
                 type: string
+              ttlSeconds:
+                description: |-
+                  TTLSeconds is the effective lifetime granted, after clamping the requested
+                  value to the template maximum. -1 means unlimited.
+                format: int64
+                type: integer
               uuid:
-                description: UUID is the short unique identifier assigned by the operator.
+                description: UUID is the bound instance's short identifier.
                 type: string
             type: object
         type: object

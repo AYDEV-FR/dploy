@@ -54,7 +54,9 @@ func (h *EnvironmentsHandler) ListAvailable(c *fiber.Ctx) error {
 	return c.JSON(response)
 }
 
-// ListUserEnvironments returns all instances owned by the authenticated user.
+// ListUserEnvironments returns all environments owned by the authenticated user,
+// read from their claims — the one object that carries both the request and the
+// operator's answer to it.
 //
 //	@Summary		List user's environments
 //	@Tags			environments
@@ -86,43 +88,44 @@ func (h *EnvironmentsHandler) ListUserEnvironments(c *fiber.Ctx) error {
 	// List everything the requester owns: their username plus any group/claim
 	// values used as owner keys (personal + team-shared environments).
 	identities := kube.Identities(claimsMap(c), ownerClaims, username)
-	insts, err := h.kubeClient.ListOwnedInstances(c.Context(), identities)
+	claims, err := h.kubeClient.ListOwnedClaims(c.Context(), identities)
 	if err != nil {
 		return internalError(c, err)
 	}
 
-	// The requester's personal owner key, to flag team-shared instances.
+	// The requester's personal owner key, to flag team-shared environments.
 	selfOwner, _ := kube.ResolveOwner(claimsMap(c), "", username)
 
-	environments := make([]models.UserEnvironmentResponse, 0, len(insts))
-	for i := range insts {
-		inst := &insts[i]
+	environments := make([]models.UserEnvironmentResponse, 0, len(claims))
+	for i := range claims {
+		claim := &claims[i]
 
 		icon, description := "default", ""
-		extendTTL, maxExtends := cfg.ExtendTTL, 0
-		if t := tmplByName[inst.Spec.TemplateRef]; t != nil {
+		baseTTL, extendTTL, maxExtends := cfg.DefaultTTL, cfg.ExtendTTL, 0
+		if t := tmplByName[claim.Spec.TemplateRef]; t != nil {
 			icon = t.Spec.Icon
 			description = t.Spec.Description
-			_, extendTTL, maxExtends, _ = templateTTL(t, cfg)
+			baseTTL, extendTTL, maxExtends, _ = templateTTL(t, cfg)
 		}
 
 		environments = append(environments, models.UserEnvironmentResponse{
-			Name:        inst.Spec.TemplateRef,
+			Name:        claim.Spec.TemplateRef,
 			Description: description,
-			UUID:        inst.Status.UUID,
-			Status:      instanceStatus(inst),
-			URL:         inst.Status.URL,
-			ExpiresAt:   instanceExpiresAt(inst),
+			UUID:        claim.Status.UUID,
+			Status:      claimStatus(claim),
+			URL:         claim.Status.ConnectionURL,
+			ExpiresAt:   claimExpiresAt(claim),
 			Icon:        icon,
-			ExtendCount: kube.ExtendCount(inst),
+			ExtendCount: kube.ExtendCount(claim, int64(baseTTL), int64(extendTTL)),
 			MaxExtends:  maxExtends,
 			ExtendTTL:   extendTTL,
-			IsUnlimited: inst.Spec.TTLSeconds == -1,
-			Owner:       inst.Spec.Owner,
-			Shared:      inst.Spec.Owner != "" && inst.Spec.Owner != selfOwner,
+			IsUnlimited: claim.Status.TTLSeconds == -1,
+			Owner:       claim.Spec.Owner,
+			Shared:      claim.Spec.Owner != "" && claim.Spec.Owner != selfOwner,
+			Message:     claimMessage(claim),
 
-			ConnectionType:    string(inst.Status.ConnectionType),
-			ConnectionMessage: inst.Status.ConnectionMessage,
+			ConnectionType:    string(claim.Status.ConnectionType),
+			ConnectionMessage: claim.Status.ConnectionMessage,
 		})
 	}
 

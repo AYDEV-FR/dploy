@@ -29,6 +29,10 @@ type UserEnvironmentResponse struct {
 	Owner  string `json:"owner,omitempty"`  // Resolved owner key (username, group, …)
 	Shared bool   `json:"shared,omitempty"` // True when owned by someone other than the requester (team-shared)
 
+	// Message explains why an environment is not running — waiting on a warm
+	// pool instance, refused over quota, expired. Empty once it is up.
+	Message string `json:"message,omitempty"`
+
 	ConnectionType    string `json:"connectionType,omitempty"`    // "web" (default) or "instructions"
 	ConnectionMessage string `json:"connectionMessage,omitempty"` // Copyable command when type is "instructions"
 }
@@ -46,6 +50,7 @@ type RunEnvironmentResponse struct {
 	ExpiresAt string `json:"expiresAt"`
 	Owner     string `json:"owner,omitempty"`
 	Shared    bool   `json:"shared,omitempty"`
+	Message   string `json:"message,omitempty"` // Why it isn't running yet, when it isn't
 
 	ConnectionType    string `json:"connectionType,omitempty"`
 	ConnectionMessage string `json:"connectionMessage,omitempty"`
@@ -58,6 +63,7 @@ type StatusResponse struct {
 	ExpiresAt string `json:"expiresAt"`
 	Owner     string `json:"owner,omitempty"`
 	Shared    bool   `json:"shared,omitempty"`
+	Message   string `json:"message,omitempty"` // Why it isn't running yet, when it isn't
 
 	ConnectionType    string `json:"connectionType,omitempty"`
 	ConnectionMessage string `json:"connectionMessage,omitempty"`
@@ -86,9 +92,12 @@ type MeResponse struct {
 }
 
 // AdminInstanceRow is the per-row shape served by GET /api/admin/instances —
-// shaped like `kubectl get dployinstance` for the Manager view, so it's not
-// the same as UserEnvironmentResponse (no template description, no quota
-// fields, and the instance's metadata.name + creationTimestamp are first-class).
+// shaped like `kubectl get dployinstance` for the Manager view, so it's not the
+// same as UserEnvironmentResponse (no template description, no quota fields, and
+// the instance's metadata.name + creationTimestamp are first-class).
+//
+// It reads instances rather than claims so unclaimed warm pool members and the
+// workload namespaces stay visible; Claim names the request holding each one.
 type AdminInstanceRow struct {
 	Name        string `json:"name"`        // DployInstance metadata.name
 	Template    string `json:"template"`    // spec.templateRef
@@ -98,6 +107,7 @@ type AdminInstanceRow struct {
 	ExpiresAt   string `json:"expiresAt"`   // RFC3339, empty for unlimited / unclaimed pool
 	CreatedAt   string `json:"createdAt"`   // metadata.creationTimestamp, RFC3339
 	Namespace   string `json:"namespace"`   // status.namespace (the workload ns)
+	Claim       string `json:"claim"`       // dploy.dev/claim — empty for an unclaimed pool member
 	UUID        string `json:"uuid"`        // status.uuid
 	IsUnlimited bool   `json:"isUnlimited"` // spec.ttlSeconds == -1
 }
