@@ -9,7 +9,7 @@ from touching the deployment engine directly.
 
 ## Overview
 
-![Dploy architecture: the browser talks to the Dploy API, which writes DployTemplate and DployInstance custom resources; the operator reconciles them into Flux GitRepository/HelmRepository and HelmRelease resources that install the environment into a per-instance workload namespace.](/diagrams/dploy-architecture.svg)
+![Dploy architecture: the browser talks to the Dploy API, which writes DployInstanceClaim custom resources and nothing else; the operator binds each claim to a DployInstance it then owns, and reconciles it into Flux GitRepository/HelmRepository and HelmRelease resources that install the environment into a per-instance workload namespace.](/diagrams/dploy-architecture.svg)
 
 ## Components
 
@@ -48,7 +48,7 @@ Three controllers built with controller-runtime:
 #### Binding a warm instance
 
 Several users can want the last warm instance at the same moment, so the binding is decided by the
-API server, not by the operator's own bookkeeping. The claim controller writes one label —
+*Kubernetes* API server, not by the operator's own bookkeeping. The claim controller writes one label —
 `dploy.dev/claim-uid` — onto a candidate instance through a full object update. Optimistic
 concurrency does the rest: a claimer holding a stale copy is rejected with a conflict and moves on
 to the next candidate. Only once that write lands does the winner apply the rest of the binding
@@ -56,6 +56,19 @@ to the next candidate. Only once that write lands does the winner apply the rest
 
 The instance is then owned by the claim, which is what makes `kubectl delete dployinstanceclaim`
 tear the environment down.
+
+#### Settling the per-owner quota
+
+The same burst breaks a naive quota check. Concurrent claims for one owner each pass the check
+before any of them binds, and each then sees a different partial set of instances — so a single
+count, taken once, lets the cap drift. Instead the operator re-ranks the owner's instances
+(oldest first, keep `limit`) on every reconcile for the first minute after a binding. The rule is
+stable, so once every instance is visible all claims agree on who loses, and the surplus give
+theirs back.
+
+One consequence is visible: a claim can go `Bound` and then `Rejected` a few seconds later. Past
+that window an environment you hold is yours — lowering a quota never reaches back and kills
+something already running.
 
 #### The whole cycle, without the API
 
@@ -115,6 +128,10 @@ Only the operator can reach Flux, and only the operator can *write* a `DployInst
 the trust boundary auditable: a compromised API can at most file environment requests under
 identities it can already authenticate — never arbitrary workloads, and never a longer TTL or an
 extra environment than the operator grants.
+
+## Claim lifecycle
+
+![DployInstanceClaim lifecycle: a claim is Pending until the operator binds an instance to it, then Bound; it is Rejected when it cannot be satisfied — over quota, unknown or disabled template — and Expired once its TTL elapses, leaving a tombstone that no longer counts against the quota.](/diagrams/dploy-claim-lifecycle.svg)
 
 ## Instance lifecycle
 
