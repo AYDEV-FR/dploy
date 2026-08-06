@@ -63,9 +63,12 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	// Ensure the finalizer and management labels in a single metadata update.
+	// A NotFound here means the instance was deleted mid-reconcile — a claim
+	// releasing an over-quota binding, or a TTL expiring — which is an outcome,
+	// not a failure.
 	if r.ensureMeta(&inst) {
 		if err := r.Update(ctx, &inst); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -374,9 +377,15 @@ func (r *DployInstanceReconciler) fail(ctx context.Context, original, inst *dplo
 	return ctrl.Result{RequeueAfter: failureRequeue}, nil
 }
 
+// patchStatus writes the observed state. Losing the object between reading and
+// patching it is normal — it may have just been deleted — so NotFound is not an
+// error worth retrying or logging.
 func (r *DployInstanceReconciler) patchStatus(ctx context.Context, original, inst *dployv1alpha1.DployInstance) error {
 	inst.Status.ObservedGeneration = inst.Generation
 	if err := r.Status().Patch(ctx, inst, client.MergeFrom(original)); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("patch DployInstance status: %w", err)
 	}
 	return nil
