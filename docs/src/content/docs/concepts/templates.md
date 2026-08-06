@@ -224,6 +224,8 @@ status:
 
 ### Claim phases
 
+![DployInstanceClaim lifecycle: a claim is Pending until the operator binds an instance to it, then Bound; it is Rejected when it cannot be satisfied, and Expired once its TTL elapses.](/diagrams/dploy-claim-lifecycle.svg)
+
 | Phase | Meaning |
 |-------|---------|
 | `Pending` | Accepted, not holding an environment yet — typically waiting for a warm instance |

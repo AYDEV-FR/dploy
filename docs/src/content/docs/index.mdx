@@ -35,8 +35,9 @@ Dploy is split into two cooperating pieces:
 
 <CardGrid>
   <Card title="Operator + API" icon="puzzle">
-    A clean split: the API requests environments by writing CRs; the operator does the actual
-    deployment via Flux. The API physically cannot create a HelmRelease.
+    A clean split: the API files a request, the operator decides what to do about it. Which
+    instance, for how long, whether the quota allows it — none of that is the API's call, and its
+    RBAC makes sure of it.
   </Card>
   <Card title="GitOps-native" icon="github">
     Charts are pulled from Git or Helm repositories by Flux. Every instance is a real
@@ -46,28 +47,41 @@ Dploy is split into two cooperating pieces:
     Pre-provision instances so users get an environment instantly — no cold-start wait.
   </Card>
   <Card title="TTL & quotas" icon="setting">
-    Per-template lifetimes, extensions, and per-user quotas. Expired instances clean themselves up.
+    The clock starts when your environment is handed over, not when you asked — so queueing for a
+    warm instance costs you nothing. Extensions are capped by the template, quotas by the owner.
   </Card>
   <Card title="OIDC auth" icon="seti:lock">
-    JWT/OIDC authentication via JWKS. JWT claims flow into your chart values for per-user
-    customization.
+    JWT/OIDC authentication via JWKS. The claims you choose to forward flow into your chart values
+    for per-user customization — the raw token never leaves the API server.
   </Card>
   <Card title="Templated values" icon="open-book">
-    Render Helm values and connection URLs with Go templates + [sprig](https://masterminds.github.io/sprig/), using the owner, UUID,
-    params and claims.
+    Render Helm values and connection URLs with Go templates + [sprig](https://masterminds.github.io/sprig/), using the owner, UUID
+    and request params.
   </Card>
 </CardGrid>
 
 ## How it works
 
-![Dploy architecture overview: the API writes custom resources, the operator reconciles them into Flux resources that deploy each environment.](/diagrams/dploy-architecture.svg)
+![Dploy architecture overview: the API writes DployInstanceClaim custom resources; the operator binds each claim to a DployInstance it owns and reconciles it into Flux resources that deploy the environment.](/diagrams/dploy-architecture.svg)
 
-Each environment:
+Asking for an environment means writing one object — a `DployInstanceClaim` — and watching it:
+
+```bash
+kubectl apply -f claim.yaml
+kubectl get dclaim -w
+# NAME               TEMPLATE   OWNER      PHASE     INSTANCE          URL
+# john-doe-webterm   webterm    john-doe   Pending
+# john-doe-webterm   webterm    john-doe   Bound     webterm-pool-x9   https://webterm-a1b2c3d4.env.dploy.dev
+```
+
+![DployInstanceClaim lifecycle: a claim is Pending until the operator binds an instance to it, then Bound; it is Rejected when it cannot be satisfied, and Expired once its TTL elapses.](/diagrams/dploy-claim-lifecycle.svg)
+
+Behind that, each environment:
 
 1. Gets an immutable 8-character UUID.
 2. Is deployed into its own namespace `<owner>-<name>-<uuid>`.
 3. Is exposed at a URL derived from `connectionURLTemplate` (default `<name>-<uuid>.<baseDomain>`).
-4. Expires and is garbage-collected after its TTL.
+4. Is owned by the claim, so deleting the claim tears it down — and so does its TTL.
 
 ## Next steps
 
