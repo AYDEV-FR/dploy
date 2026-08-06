@@ -39,6 +39,14 @@ const (
 	// pool is heavily contended, and backing off beats spinning.
 	claimBindRetries = 8
 
+	// quotaSettleWindow is how long after a binding the per-owner quota is still
+	// re-ranked. It has to outlast a burst of concurrent claims becoming visible
+	// to each other; past it, a running environment is never taken away.
+	quotaSettleWindow = 60 * time.Second
+
+	// quotaSettleRequeue paces the re-ranking inside that window.
+	quotaSettleRequeue = 3 * time.Second
+
 	// claimMaxConcurrentReconciles lets independent claims bind in parallel. The
 	// binding itself is safe under concurrency (optimistic locking on the
 	// instance), and serializing it would make a burst of claims crawl.
@@ -163,17 +171,6 @@ func (r *DployInstanceClaimReconciler) Reconcile(ctx context.Context, req ctrl.R
 				fmt.Sprintf("waiting for a warm instance of template %q", tmpl.Name))
 		}
 		claim.Status.BoundAt = &boundAt
-
-		// A burst of claims for the same owner can each pass the pre-check before
-		// any of them binds. Settle it deterministically now that the instances
-		// exist, rather than letting the quota drift.
-		if over, limit, qerr := r.evictIfOverQuota(ctx, &claim, &tmpl, eff, inst); qerr != nil {
-			return ctrl.Result{}, qerr
-		} else if over {
-			claim.Status.BoundAt = nil
-			return r.reject(ctx, original, &claim, "QuotaExceeded",
-				fmt.Sprintf("owner %q already holds the maximum of %d environment(s)", claim.Spec.Owner, limit))
-		}
 	}
 
 	// The TTL clock starts at the binding, so extending is a patch that raises
@@ -190,6 +187,27 @@ func (r *DployInstanceClaimReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return r.expire(ctx, original, &claim, inst)
 	}
 
+	// Settle quota races after the fact. Concurrent claims for one owner each pass
+	// the pre-check before any of them binds, and each then sees a different
+	// partial set of instances — so a single post-binding check ranks against an
+	// incomplete list and lets the quota drift. Re-ranking on every reconcile
+	// while the binding is fresh converges instead: the rule (keep the oldest
+	// `limit` instances) is stable, so once every create is visible all claims
+	// agree on who loses.
+	//
+	// The window matters. Past it an environment you hold is yours, so lowering a
+	// quota never reaches back and kills something already running.
+	settling := time.Since(claim.Status.BoundAt.Time) < quotaSettleWindow
+	if settling {
+		if over, limit, qerr := r.evictIfOverQuota(ctx, &claim, &tmpl, eff, inst); qerr != nil {
+			return ctrl.Result{}, qerr
+		} else if over {
+			claim.Status.BoundAt = nil
+			return r.reject(ctx, original, &claim, "QuotaExceeded",
+				fmt.Sprintf("owner %q already holds the maximum of %d environment(s)", claim.Spec.Owner, limit))
+		}
+	}
+
 	if err := r.syncInstance(ctx, &claim, inst, ttl, claim.Status.ExpiresAt); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -199,10 +217,17 @@ func (r *DployInstanceClaimReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, err
 	}
 
+	res := ctrl.Result{}
 	if claim.Status.ExpiresAt != nil {
-		return ctrl.Result{RequeueAfter: time.Until(claim.Status.ExpiresAt.Time)}, nil
+		res.RequeueAfter = time.Until(claim.Status.ExpiresAt.Time)
 	}
-	return ctrl.Result{}, nil
+	// While the binding is fresh, come back soon enough to re-rank against a
+	// settled view. Instance status updates usually wake us anyway; this makes the
+	// convergence guaranteed rather than incidental.
+	if settling && (res.RequeueAfter == 0 || res.RequeueAfter > quotaSettleRequeue) {
+		res.RequeueAfter = quotaSettleRequeue
+	}
+	return res, nil
 }
 
 // ensureMeta stamps the labels that make claims listable by owner and template,
@@ -550,9 +575,15 @@ func (r *DployInstanceClaimReconciler) observe(ctx context.Context, original, cl
 	return r.patchStatus(ctx, original, claim)
 }
 
+// patchStatus writes the observed state. A claim deleted mid-reconcile is an
+// ordinary outcome — the user released their environment — so NotFound is not an
+// error worth retrying or logging.
 func (r *DployInstanceClaimReconciler) patchStatus(ctx context.Context, original, claim *dployv1alpha1.DployInstanceClaim) error {
 	claim.Status.ObservedGeneration = claim.Generation
 	if err := r.Status().Patch(ctx, claim, client.MergeFrom(original)); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("patch DployInstanceClaim status: %w", err)
 	}
 	return nil

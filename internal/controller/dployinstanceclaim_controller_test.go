@@ -360,6 +360,70 @@ func TestClaimRejectedOverQuota(t *testing.T) {
 	})
 }
 
+// TestQuotaHoldsUnderABurst is the regression test for a hole a real cluster
+// found and a two-claim race did not: with more claimants than the cap, each
+// claim binds and then ranks itself against whichever instances happen to be
+// visible at that instant. A single post-binding check therefore lets a claim
+// rank low against a partial set and keep an instance it shouldn't. Only
+// re-ranking until the view settles converges on the cap.
+func TestQuotaHoldsUnderABurst(t *testing.T) {
+	requireEnvtest(t)
+	const limit = 2
+	const claimants = 5
+
+	ns := newNamespace(t)
+	lim := limit
+	tmpl := makeTemplate(t, ns, "burst", func(tp *dployv1alpha1.DployTemplate) {
+		tp.Spec.MaxInstancesPerUser = &lim
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < claimants; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			c := &dployv1alpha1.DployInstanceClaim{}
+			c.Name = fmt.Sprintf("burst-%d", i)
+			c.Namespace = ns
+			c.Spec = dployv1alpha1.DployInstanceClaimSpec{TemplateRef: tmpl.Name, Owner: "alice"}
+			if err := k8sClient.Create(context.Background(), c); err != nil {
+				t.Errorf("create claim: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// The cap is about environments, not bookkeeping: however the race resolves,
+	// the owner ends up holding exactly `limit` of them.
+	eventually(t, "the owner's instance count to settle at the quota", func() (bool, string) {
+		insts := listInstances(t, ns, client.MatchingLabels{LabelOwner: "alice"})
+		return len(insts) == limit, fmt.Sprintf("%d instances", len(insts))
+	})
+	eventually(t, "the surplus claims to be rejected", func() (bool, string) {
+		var list dployv1alpha1.DployInstanceClaimList
+		if err := k8sClient.List(context.Background(), &list, client.InNamespace(ns)); err != nil {
+			return false, err.Error()
+		}
+		bound, rejected := 0, 0
+		for i := range list.Items {
+			switch list.Items[i].Status.Phase {
+			case dployv1alpha1.ClaimBound:
+				bound++
+			case dployv1alpha1.ClaimRejected:
+				rejected++
+			case dployv1alpha1.ClaimPending, dployv1alpha1.ClaimExpired:
+			}
+		}
+		return bound == limit && rejected == claimants-limit, fmt.Sprintf("bound=%d rejected=%d", bound, rejected)
+	})
+
+	// And it stays settled — no late reconcile hands out a surplus environment.
+	consistently(t, 3*time.Second, "the quota drifted after settling", func() (bool, string) {
+		insts := listInstances(t, ns, client.MatchingLabels{LabelOwner: "alice"})
+		return len(insts) <= limit, fmt.Sprintf("%d instances > limit %d", len(insts), limit)
+	})
+}
+
 // TestClaimRejectedForMissingTemplate covers the unsatisfiable-request path.
 func TestClaimRejectedForMissingTemplate(t *testing.T) {
 	requireEnvtest(t)
