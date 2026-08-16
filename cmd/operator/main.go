@@ -38,8 +38,13 @@ func main() {
 	var metricsAddr string
 	var probeAddr string
 	var enableLeaderElection bool
+	var instanceConcurrency int
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metrics endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.IntVar(&instanceConcurrency, "instance-concurrency", 4,
+		"How many DployInstances the operator materializes at once. Instances are "+
+			"independent, so this is the main knob for how fast a burst of claims turns "+
+			"into running environments.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election, ensuring only one active manager.")
 	opts := zap.Options{Development: true}
@@ -75,8 +80,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.DployInstanceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:                  mgr.GetClient(),
+		Scheme:                  mgr.GetScheme(),
+		MaxConcurrentReconciles: instanceConcurrency,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DployInstance")
 		os.Exit(1)
