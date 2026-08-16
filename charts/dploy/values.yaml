@@ -24,7 +24,9 @@ strategy:
 image:
   repository: ghcr.io/aydev-fr/dploy
   pullPolicy: IfNotPresent
-  tag: "main"
+  # Empty follows the chart's appVersion, so a released chart deploys the
+  # matching released image. Set it explicitly (e.g. "main") to track a branch.
+  tag: ""
 
 imagePullSecrets: []
 nameOverride: ""
@@ -181,7 +183,8 @@ operator:
   image:
     repository: ghcr.io/aydev-fr/dploy-operator
     pullPolicy: IfNotPresent
-    tag: "main"
+    # As above: empty follows appVersion.
+    tag: ""
 
   serviceAccount:
     create: true
