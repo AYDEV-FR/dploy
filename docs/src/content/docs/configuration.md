@@ -186,5 +186,6 @@ John.Doe@example.com → john-doe-example-com
 | Workload namespace | `<owner>-<name>-<uid>` | `john-doe-vscode-a1b2c3d4` | `pool-webshell-c7218ff8` |
 | Default `Host` | `<name>-<uid>.<baseDomain>` | `vscode-a1b2c3d4.env.dploy.dev` | `webshell-c7218ff8.env.dploy.dev` |
 | `DployInstance` (on-demand) | `<owner>-<template>` | `john-doe-vscode` | — (pool members get random suffixes: `webshell-pool-XXXXX`) |
+| Flux source (per **template**) | `<template>-src` | `vscode-src` | `webshell-src` |
 
 The UUID is 8 hex characters, generated once by the operator at the first reconcile and stored immutably in `status.uuid`. The workload namespace uses `pool` as its owner segment for pool members, and **keeps it after they are claimed** — the namespace is created when the instance is provisioned, long before an owner exists, and a namespace cannot be renamed. Look at `dploy.dev/owner` on the instance, not at the namespace name, to see who holds a pooled environment; the `Host` template segment always reflects the `DployTemplate` name regardless of mode, so `webshell-<uid>` and `kasm-<uid>` are visibly distinct even before they're claimed.

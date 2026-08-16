@@ -107,8 +107,20 @@ kubectl delete dclaim john-doe-webterm
 Dploy delegates all deployment to Flux. Because Dploy only exposes `git`/`helm` chart sources,
 the operator always builds a `HelmRelease` whose chart references a **`GitRepository`** or
 **`HelmRepository`** (OCI Helm registries use a `HelmRepository` of type `oci`). The
-`HelmRelease` and its source live in the instance's own namespace (so owner references are
-valid) and install into the per-instance workload namespace via `targetNamespace`.
+`HelmRelease` lives in the instance's own namespace (so owner references are valid) and
+installs into the per-instance workload namespace via `targetNamespace`.
+
+**One source per template, not per instance.** Every instance of a template resolves the same
+URL at the same revision, so the source is a single `<template>-src` object owned by the
+`DployTemplate` and shared by all of its instances. A copy per instance meant source-controller
+cloned one repository once per environment and re-fetched every copy on its own interval — at
+300 environments on a 5m interval, a fetch a second against the forge for content that never
+differs. Measured on kind, a 50-environment burst went from 60 identical `GitRepository`
+objects to 1, and the median time to a usable on-demand environment fell from 38.6s to 24.6s.
+
+The trade-off to know: deleting a template garbage-collects the shared source, including from
+under any claimed instance still running off it. The workload keeps serving — Helm has already
+installed it — but Flux can no longer upgrade or re-render that release.
 
 ### OIDC provider
 
@@ -155,7 +167,8 @@ extra environment than the operator grants.
 
 `DployInstance` carries a finalizer (`dploy.dev/instance-cleanup`). On deletion the operator
 removes the `HelmRelease` (waiting for Flux to finish the Helm uninstall), then deletes the
-workload namespace. The Flux source is owner-referenced and garbage-collected.
+workload namespace. The Flux source is left alone — it belongs to the template and is shared
+with every other instance of it; it is garbage-collected when the template goes.
 
 ## Labels & annotations
 
