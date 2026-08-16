@@ -71,6 +71,22 @@ func (r *DployTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
+	// The fill loop runs to completion inside a single reconcile, and that is what
+	// keeps it from over-filling. Every create it issues wakes this controller
+	// again through the instance watch, and a re-reconcile running against a cache
+	// that still missed those creates would count the same empty slot twice and
+	// fill it twice — nothing downstream would undo it, since the extra members
+	// are legitimate warm instances. It does not happen because the creates are
+	// round trips and their watch events land while the loop is still running: the
+	// cache converges during the burst rather than after it, and the work queue
+	// collapses the resulting events into one follow-up reconcile.
+	//
+	// Two changes would break that and force tracking creates in flight (the
+	// "expectations" pattern): returning early with creates outstanding — a refill
+	// rate limit is the obvious way to end up there — or issuing the creates off
+	// the reconcile goroutine. TestPoolFillsExactlyOnce pins the property, and
+	// pool_kind_test.go stresses it against a real API server, where the cache lag
+	// is real rather than in-process.
 	created := 0
 	if isPoolActive(&tmpl) {
 		eff, err := operatorconfig.Resolve(ctx, r.Client)
