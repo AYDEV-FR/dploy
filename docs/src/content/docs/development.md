@@ -95,7 +95,7 @@ dploy/
 
 ### Operator (`cmd/operator`, `internal/controller`)
 
-- `dployinstance_controller.go` — renders templates, ensures the Flux source + `HelmRelease`,
+- `dployinstance_controller.go` — renders templates, ensures the template's shared Flux source + the instance's `HelmRelease`,
   projects status, enforces TTL, finalizer teardown.
 - `dploytemplate_controller.go` — warm-pool maintenance + occupancy status.
 - `operatorconfig_controller.go` — observes the cluster-scoped config singleton.

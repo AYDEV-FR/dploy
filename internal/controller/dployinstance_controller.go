@@ -10,7 +10,6 @@ import (
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
-	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -33,9 +32,9 @@ const (
 	deletionRequeue     = 5 * time.Second
 )
 
-// DployInstanceReconciler materializes a DployInstance into a Flux source
-// (GitRepository/HelmRepository) plus a HelmRelease, projects their observed
-// status back onto the instance, and enforces the instance TTL.
+// DployInstanceReconciler materializes a DployInstance into a HelmRelease
+// pointing at its template's shared Flux source (GitRepository/HelmRepository),
+// projects the observed status back onto the instance, and enforces the TTL.
 type DployInstanceReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -164,7 +163,7 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.ensureNamespace(ctx, targetNS, &inst); err != nil {
 		return r.fail(ctx, original, &inst, "NamespaceError", err.Error())
 	}
-	srcKind, srcName, err := r.ensureSource(ctx, &inst, &tmpl, eff)
+	srcKind, srcName, err := r.ensureSource(ctx, &tmpl, eff)
 	if err != nil {
 		return r.fail(ctx, original, &inst, "SourceError", err.Error())
 	}
@@ -392,12 +391,17 @@ func (r *DployInstanceReconciler) patchStatus(ctx context.Context, original, ins
 }
 
 // SetupWithManager registers the controller with the manager.
+//
+// The Flux source is no longer owned by the instance — it is shared per template
+// — so there is nothing to Owns() there. Nothing is lost: helm-controller
+// watches the source itself and reflects a source that is missing, stalled or
+// newly ready into the HelmRelease's conditions, which this controller does
+// watch. The HelmRelease is the instance's single proxy for everything
+// downstream of it.
 func (r *DployInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&dployv1alpha1.DployInstance{}).
 		Owns(&helmv2.HelmRelease{}).
-		Owns(&sourcev1.GitRepository{}).
-		Owns(&sourcev1.HelmRepository{}).
 		Named("dployinstance").
 		Complete(r)
 }

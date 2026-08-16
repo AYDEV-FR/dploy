@@ -66,8 +66,9 @@ func translateHelmRelease(hr *helmv2.HelmRelease) helmReleaseState {
 	}
 }
 
-// engineResourceName is the name shared by the instance's Flux source and
-// HelmRelease, created in the instance's own namespace (so owner refs are valid).
+// engineResourceName is the instance's HelmRelease, created in the instance's
+// own namespace (so owner refs are valid). The Flux source it points at is not
+// per-instance — see templateSourceName.
 func engineResourceName(inst *dployv1alpha1.DployInstance) string {
 	return inst.Name
 }
@@ -105,13 +106,47 @@ func (r *DployInstanceReconciler) ensureNamespace(ctx context.Context, name stri
 	return nil
 }
 
+// templateSourceName is the Flux source shared by every instance of a template.
+// It lives beside the instances, in the template's namespace, so the HelmRelease
+// reference stays same-namespace.
+func templateSourceName(tmpl *dployv1alpha1.DployTemplate) string {
+	return tmpl.Name + "-src"
+}
+
+// templateLabels marks an object that belongs to a template rather than to any
+// one instance — so it carries no instance UUID and no owner.
+func templateLabels(tmpl *dployv1alpha1.DployTemplate) map[string]string {
+	return map[string]string{
+		LabelManaged:  "true",
+		LabelTemplate: tmpl.Name,
+	}
+}
+
 // ensureSource reconciles the Flux source backing the instance's chart and
 // returns the source Kind and name to wire into the HelmRelease. dploy only
 // exposes git/helm charts, so the source is a GitRepository or HelmRepository
 // (OCI Helm registries are a HelmRepository of type "oci").
-func (r *DployInstanceReconciler) ensureSource(ctx context.Context, inst *dployv1alpha1.DployInstance, tmpl *dployv1alpha1.DployTemplate, eff operatorconfig.Effective) (kind, name string, err error) {
+//
+// One source per *template*, not per instance. Every instance of a template
+// resolves the same URL at the same revision, so a copy per instance had
+// source-controller cloning one repository once per environment and re-fetching
+// each copy on its own interval: at 300 environments on a 5m interval that is a
+// fetch a second against the forge for content that never differs, plus 300
+// artifacts and 300 objects to reconcile. Measured on kind, a 50-environment
+// burst produced 60 byte-identical GitRepositories.
+//
+// The template owns it, which is where its lifetime belongs — the source
+// describes the catalog entry, not any one environment. The consequence worth
+// knowing: deleting a template removes the source from under any claimed
+// instance still running off it. The workload keeps serving (Helm has already
+// installed it) but Flux can no longer upgrade or re-render that release.
+//
+// Every instance computes an identical spec, so CreateOrUpdate writes on the
+// first instance and is a no-op for the rest: a burst causes no write
+// amplification on the shared object.
+func (r *DployInstanceReconciler) ensureSource(ctx context.Context, tmpl *dployv1alpha1.DployTemplate, eff operatorconfig.Effective) (kind, name string, err error) {
 	cs := tmpl.Spec.Chart
-	name = engineResourceName(inst)
+	name = templateSourceName(tmpl)
 	interval := metav1.Duration{Duration: eff.FluxInterval}
 
 	if cs.Type == dployv1alpha1.ChartSourceHelm {
@@ -120,13 +155,13 @@ func (r *DployInstanceReconciler) ensureSource(ctx context.Context, inst *dployv
 			repoType = sourcev1.HelmRepositoryTypeOCI
 		}
 		repo := &sourcev1.HelmRepository{}
-		repo.Name, repo.Namespace = name, inst.Namespace
+		repo.Name, repo.Namespace = name, tmpl.Namespace
 		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, repo, func() error {
-			repo.Labels = managedLabels(inst)
+			repo.Labels = templateLabels(tmpl)
 			repo.Spec.URL = cs.RepoURL
 			repo.Spec.Type = repoType
 			repo.Spec.Interval = interval
-			return controllerutil.SetControllerReference(inst, repo, r.Scheme)
+			return controllerutil.SetControllerReference(tmpl, repo, r.Scheme)
 		})
 		if err != nil {
 			return "", "", fmt.Errorf("ensure HelmRepository: %w", err)
@@ -136,13 +171,13 @@ func (r *DployInstanceReconciler) ensureSource(ctx context.Context, inst *dployv
 
 	// Default: git source.
 	repo := &sourcev1.GitRepository{}
-	repo.Name, repo.Namespace = name, inst.Namespace
+	repo.Name, repo.Namespace = name, tmpl.Namespace
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, repo, func() error {
-		repo.Labels = managedLabels(inst)
+		repo.Labels = templateLabels(tmpl)
 		repo.Spec.URL = cs.RepoURL
 		repo.Spec.Reference = &sourcev1.GitRepositoryRef{Branch: firstNonEmpty(cs.TargetRevision, "main")}
 		repo.Spec.Interval = interval
-		return controllerutil.SetControllerReference(inst, repo, r.Scheme)
+		return controllerutil.SetControllerReference(tmpl, repo, r.Scheme)
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("ensure GitRepository: %w", err)
