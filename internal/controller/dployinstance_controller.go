@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/yaml"
 
@@ -30,6 +31,12 @@ const (
 	provisioningRequeue = 15 * time.Second
 	failureRequeue      = 30 * time.Second
 	deletionRequeue     = 5 * time.Second
+
+	// instanceMaxConcurrentReconciles matches the claim controller's default.
+	// A claim that binds instantly still waits on the instance being materialized
+	// before it reports a URL, so a single instance worker would put the whole
+	// burst behind one queue.
+	instanceMaxConcurrentReconciles = 4
 )
 
 // DployInstanceReconciler materializes a DployInstance into a HelmRelease
@@ -38,6 +45,12 @@ const (
 type DployInstanceReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// MaxConcurrentReconciles bounds how many instances are materialized at once.
+	// Instances are independent — each renders its own values and writes its own
+	// namespace and HelmRelease — so serializing them only adds latency to a
+	// burst. 0 falls back to instanceMaxConcurrentReconciles.
+	MaxConcurrentReconciles int
 }
 
 // +kubebuilder:rbac:groups=dploy.dev,resources=dployinstances,verbs=get;list;watch;create;update;patch;delete
@@ -399,9 +412,14 @@ func (r *DployInstanceReconciler) patchStatus(ctx context.Context, original, ins
 // watch. The HelmRelease is the instance's single proxy for everything
 // downstream of it.
 func (r *DployInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	workers := r.MaxConcurrentReconciles
+	if workers <= 0 {
+		workers = instanceMaxConcurrentReconciles
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&dployv1alpha1.DployInstance{}).
 		Owns(&helmv2.HelmRelease{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: workers}).
 		Named("dployinstance").
 		Complete(r)
 }
