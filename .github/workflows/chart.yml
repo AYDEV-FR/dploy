@@ -26,11 +26,29 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v4
 
+      # The chart refuses to render without the values the API needs, so both
+      # steps supply them. See the guard in templates/secret.yaml.
       - name: Lint chart
-        run: helm lint charts/dploy
+        run: helm lint charts/dploy --set auth.jwksURL=https://idp.invalid/jwks --set auth.jwtIssuer=https://idp.invalid
 
       - name: Render templates
-        run: helm template dploy charts/dploy > /dev/null
+        run: helm template dploy charts/dploy --set auth.jwksURL=https://idp.invalid/jwks --set auth.jwtIssuer=https://idp.invalid > /dev/null
+
+      # Operator-only install: no API, therefore no identity provider needed.
+      # This is a supported deployment, so the guard must not reject it.
+      - name: Render templates (operator only)
+        run: helm template dploy charts/dploy --set replicaCount=0 > /dev/null
+
+      # And the guard has to actually guard: rendering with no values at all
+      # must fail, naming the value to set. A chart that installs into a
+      # CrashLoopBackOff instead is what this replaced.
+      - name: Guard rejects a missing identity provider
+        run: |
+          if helm template dploy charts/dploy > /dev/null 2>err.txt; then
+            echo "expected the render to fail without auth.jwksURL"; exit 1
+          fi
+          grep -q "auth.jwksURL is required" err.txt || {
+            echo "failed, but not with the message users need:"; cat err.txt; exit 1; }
 
       - name: Package chart (smoke)
         run: helm package charts/dploy --destination "${RUNNER_TEMP}/chart"
