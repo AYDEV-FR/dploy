@@ -1,0 +1,70 @@
+{% extends "admin/base.html" %}
+
+{% block content %}
+<div class="jumbotron">
+  <div class="container">
+    <h1>Dploy</h1>
+    <p class="mb-0">
+      Live <code>DployInstanceClaim</code> and <code>DployTemplate</code> objects,
+      read straight from namespace <code>{{ namespace }}</code>.
+    </p>
+  </div>
+</div>
+
+<div class="container">
+  <div id="dploy-error" class="alert alert-danger d-none" role="alert"></div>
+
+  <div class="alert alert-info" role="alert">
+    Wire a challenge to a template by putting JSON in its
+    <strong>Connection Information</strong> field:
+    <code>{"template": "&lt;name&gt;"}</code>. Optional keys:
+    <code>ttlSeconds</code> to override the lifetime (<code>-1</code> = unlimited),
+    <code>waitForPool</code> to queue for a warm pool member instead of provisioning
+    a fresh instance when the pool is empty. Players never see the JSON — the
+    plugin hides it and shows the environment panel instead.
+  </div>
+
+  <ul class="nav nav-tabs mb-3 align-items-center" id="dploy-tabs" role="tablist">
+    <li class="nav-item">
+      <a class="nav-link active" data-pane="claims" href="#">
+        Claims <span class="badge badge-secondary" id="dploy-claims-count">0</span>
+      </a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link" data-pane="templates" href="#">
+        Templates <span class="badge badge-secondary" id="dploy-templates-count">0</span>
+      </a>
+    </li>
+    <li class="nav-item ml-auto">
+      <button class="btn btn-sm btn-outline-secondary" id="dploy-refresh" type="button">Refresh</button>
+    </li>
+  </ul>
+
+  <div id="pane-claims" class="dploy-pane table-responsive">
+    <table class="table table-striped">
+      <thead>
+        <tr>
+          <th>Claim</th><th>Template</th><th>Owner</th><th>Phase</th>
+          <th>Instance</th><th>URL</th><th>Expires</th><th>Source</th>
+          <th class="text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="dploy-claims-body"></tbody>
+    </table>
+  </div>
+
+  <div id="pane-templates" class="dploy-pane table-responsive d-none">
+    <table class="table table-striped">
+      <thead>
+        <tr>
+          <th>Name</th><th>Connection Information</th><th>Display</th><th>Method</th>
+          <th>Enabled</th><th>Pool (avail/claimed/total)</th><th>Connection</th>
+        </tr>
+      </thead>
+      <tbody id="dploy-templates-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<script defer src="/plugins/ctfd_dploy/assets/dploy_manager.js"></script>
+{% endblock %}

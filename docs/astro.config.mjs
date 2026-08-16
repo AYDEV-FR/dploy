@@ -40,6 +40,7 @@ export default defineConfig({
           label: 'Guides',
           items: [
             { label: 'Web UI', link: '/guides/web-ui/' },
+            { label: 'CTFd Integration', link: '/guides/ctfd/' },
           ],
         },
         {
