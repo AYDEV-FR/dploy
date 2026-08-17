@@ -20,10 +20,21 @@
 
   var PANEL_ID = "dploy-modal-panel";
   var BASE = "/plugins/ctfd_dploy";
-  var POLL_MS = 3000;
+
+  // Polling cadence. Binding a warm pool member takes ~20ms on the operator
+  // side, but the claim carries no status yet when POST /run returns — so a
+  // flat 3s tick made an instant environment look like a three second one.
+  // Being eager only just after an action costs a handful of requests and
+  // covers the one moment a player is actually watching the panel.
+  var POLL_EAGER = 200;    // just after a click
+  var EAGER_FOR = 4000;    // how long that lasts
+  var POLL_MOVING = 3000;  // converging on its own (an on-demand install)
+  var POLL_SETTLED = 12000; // up and serving: only the countdown moves
 
   var timer = null;
   var renderedForId = null;
+  var eagerUntil = 0;
+  var lastHTML = null;
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -180,17 +191,15 @@
     );
   }
 
-  function render(panel, s) {
+  function render(s) {
     if (s.error) {
-      panel.innerHTML = card(
+      return card(
         '<div class="text-danger mb-0">' + esc(s.error) + "</div>"
       );
-      return;
     }
 
     if (s.phase === "Bound" && (s.url || s.connectionMessage)) {
-      panel.innerHTML = card(connection(s) + actions(s));
-      return;
+      return card(connection(s) + actions(s));
     }
 
     if (s.phase === "Bound" || s.phase === "Pending") {
@@ -200,7 +209,7 @@
         s.phase === "Pending"
           ? s.message || "Waiting for a free environment…"
           : "Provisioning your environment…";
-      panel.innerHTML = card(
+      return card(
         '<div class="d-flex align-items-center">' +
         '<div class="spinner-border spinner-border-sm me-2" role="status"></div>' +
         "<span>" + esc(note) + "</span>" +
@@ -209,23 +218,21 @@
         '<button type="button" class="btn btn-outline-danger btn-sm" data-dploy="stop">Cancel</button>' +
         "</div>"
       );
-      return;
     }
 
     if (s.phase === "Rejected") {
-      panel.innerHTML = card(
+      return card(
         '<div class="text-warning mb-2">' +
         esc(s.message || "Your request was rejected.") +
         "</div>" +
         '<button type="button" class="btn btn-primary btn-sm" data-dploy="run">Try again</button>'
       );
-      return;
     }
 
     // NotStarted, or Expired — both mean "there is nothing running, offer the
     // button". Running past an Expired claim replaces it server-side.
     var label = s.phase === "Expired" ? "Run Instance again" : "Run Instance";
-    panel.innerHTML = card(
+    return card(
       '<button type="button" class="btn btn-primary" data-dploy="run">' + label + "</button>" +
       (s.phase === "Expired"
         ? '<div class="text-muted small mt-2">Your previous environment expired.</div>'
@@ -237,17 +244,36 @@
     return s.phase === "Pending" || (s.phase === "Bound" && !s.url && !s.connectionMessage);
   }
 
+  // How long to wait before asking again. Eager right after an action, then
+  // back to a cadence matched to what is actually still changing.
+  function nextDelay(s) {
+    if (Date.now() < eagerUntil) return POLL_EAGER;
+    return moving(s) ? POLL_MOVING : POLL_SETTLED;
+  }
+
   function paint(id, s) {
     if (!modalIsOpen()) { stopPolling(); return; }
     var panel = ensurePanel();
     if (!panel) return;
-    render(panel, s);
-    wire(panel, id);
+
+    // Only touch the DOM when the markup actually changes. Rewriting innerHTML
+    // on every tick destroys and recreates the buttons underneath the cursor,
+    // which reads as a flicker — at 200ms after a click, five times a second.
+    // Most ticks produce identical markup (the countdown only moves once a
+    // minute), so this leaves the panel alone almost always.
+    var html = render(s);
+    if (html !== lastHTML || !panel.firstChild) {
+      panel.innerHTML = html;
+      lastHTML = html;
+      // Listeners die with the nodes they were attached to, so they are only
+      // re-bound when the nodes were actually replaced.
+      wire(panel, id);
+    }
     stopPolling();
     if (moving(s) || s.phase === "Bound") {
       // Keep polling while it converges, and slowly once it's up so the
       // countdown and an expiry that lands mid-session stay honest.
-      timer = setTimeout(function () { poll(id); }, moving(s) ? POLL_MS : POLL_MS * 4);
+      timer = setTimeout(function () { poll(id); }, nextDelay(s));
     }
   }
 
@@ -256,6 +282,9 @@
       btn.addEventListener("click", function () {
         var action = btn.getAttribute("data-dploy");
         btn.disabled = true;
+        // The response already carries the claim, but a claim filed a
+        // millisecond ago has no status yet — the answer lands right after it.
+        eagerUntil = Date.now() + EAGER_FOR;
         post(BASE + "/" + action, { challenge_id: id })
           .then(function (s) { paint(id, s); })
           .catch(function () { poll(id); });
@@ -267,7 +296,9 @@
     get(BASE + "/status?challenge_id=" + id)
       .then(function (s) { paint(id, s); })
       .catch(function () {
-        timer = setTimeout(function () { poll(id); }, POLL_MS);
+        // A failed request is not a reason to hammer: back off to the slow
+        // cadence rather than retrying eagerly at 200ms.
+        timer = setTimeout(function () { poll(id); }, POLL_MOVING);
       });
   }
 
@@ -276,6 +307,7 @@
   function refresh() {
     if (!modalIsOpen()) {
       renderedForId = null;
+      lastHTML = null;
       stopPolling();
       return;
     }
@@ -288,6 +320,7 @@
         if (!modalIsOpen()) return;
         if (!s || !s.enabled) { removePanel(); return; }
         renderedForId = id;
+        lastHTML = null;
         hideConnectionInfo();
         if (s.error) {
           var panel = ensurePanel();
