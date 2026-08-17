@@ -60,10 +60,36 @@ func translateHelmRelease(hr *helmv2.HelmRelease) helmReleaseState {
 	case metav1.ConditionTrue:
 		return helmReleaseState{readinessReady, metav1.ConditionTrue, reason, message, "Healthy"}
 	case metav1.ConditionFalse:
+		// Ready=False is not the same as failed. Flux holds Ready at False for
+		// the whole install and distinguishes "not yet" from "gave up" through
+		// the reason, not the status — so reading the status alone made every
+		// normal install report Degraded about a second after it started, which
+		// is what a player saw flash under the Run Instance button.
+		if isProgressing(hr, ready) {
+			return helmReleaseState{readinessInProgress, metav1.ConditionUnknown, reason, message, "Progressing"}
+		}
 		return helmReleaseState{readinessFailed, metav1.ConditionFalse, reason, message, "Degraded"}
 	default:
 		return helmReleaseState{readinessInProgress, metav1.ConditionUnknown, reason, message, "Progressing"}
 	}
+}
+
+// isProgressing reports whether a not-ready HelmRelease is still working rather
+// than beaten.
+//
+// ProgressingWithRetry counts as progressing on purpose: an install that failed
+// once and is retrying may still succeed, and the instance carries
+// install.remediation.retries. When Flux does give up it stops using these
+// reasons and reports the real failure, which is when the environment should be
+// called Degraded.
+func isProgressing(hr *helmv2.HelmRelease, ready *metav1.Condition) bool {
+	switch ready.Reason {
+	case fluxmeta.ProgressingReason, fluxmeta.ProgressingWithRetryReason:
+		return true
+	}
+	// Flux also raises a Reconciling condition while it works; trust it when it
+	// contradicts a stale Ready reason.
+	return apimeta.IsStatusConditionTrue(hr.Status.Conditions, fluxmeta.ReconcilingCondition)
 }
 
 // engineResourceName is the instance's HelmRelease, created in the instance's
