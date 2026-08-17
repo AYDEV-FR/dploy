@@ -246,6 +246,26 @@ def _bound_message(claim):
     return "", ""
 
 
+def _is_ready(claim):
+    """Whether the environment actually answers, which is not the same thing as
+    the claim holding one.
+
+    The connection URL is derived from the template, so it exists the moment an
+    instance does — long before a workload is serving on it. For a warm pool
+    member the two coincide, since it was provisioned before anyone claimed it;
+    for an on-demand instance they are a Helm install apart. Handing the player
+    a link in between produces a browser tab that fails to connect.
+
+    The Ready condition is the operator's own verdict, mirrored from the
+    HelmRelease, so this follows whatever the operator decides readiness means
+    rather than guessing from a phase name.
+    """
+    for c in ((claim or {}).get("status") or {}).get("conditions") or []:
+        if c.get("type") == "Ready":
+            return c.get("status") == "True"
+    return False
+
+
 def _ensure_claim(binding, player):
     """Return the player's claim for this challenge, filing one if they don't
     hold it yet. Returns (claim, error).
@@ -294,6 +314,9 @@ def _claim_view(claim, binding, title):
         "template": binding.template,
         "title": title,
         "phase": _phase_of(claim) if claim else "NotStarted",
+        # ready is what the panel gates the connection link on. phase says the
+        # claim holds an instance; ready says that instance answers.
+        "ready": _is_ready(claim),
         "instancePhase": st.get("instancePhase", ""),
         "health": st.get("health", ""),
         "url": st.get("connectionURL", ""),

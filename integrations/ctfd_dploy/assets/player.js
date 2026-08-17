@@ -198,13 +198,25 @@
       );
     }
 
-    if (s.phase === "Bound" && (s.url || s.connectionMessage)) {
+    // The link is gated on `ready`, not on having a URL. A URL exists as soon
+    // as an instance does, because it is rendered from the template — for an
+    // on-demand instance that is a Helm install before anything answers on it,
+    // and handing it over early gives the player a tab that cannot connect.
+    if (s.phase === "Bound" && s.ready && (s.url || s.connectionMessage)) {
       return card(connection(s) + actions(s));
     }
 
+    if (s.instancePhase === "Failed") {
+      return card(
+        '<div class="text-danger mb-2">Provisioning failed.' +
+        (s.health ? " (" + esc(s.health) + ")" : "") + "</div>" +
+        '<button type="button" class="btn btn-outline-danger btn-sm" data-dploy="stop">Stop</button>'
+      );
+    }
+
     if (s.phase === "Bound" || s.phase === "Pending") {
-      // Pending covers "queued for a warm pool member"; Bound-without-a-URL
-      // covers "the instance exists but Flux is still converging".
+      // Pending covers "queued for a warm pool member"; Bound-but-not-ready
+      // covers "the instance exists and Flux is still installing it".
       var note =
         s.phase === "Pending"
           ? s.message || "Waiting for a free environment…"
@@ -240,8 +252,12 @@
     );
   }
 
+  // Still going somewhere: queued for a warm member, or holding an instance
+  // that is not answering yet. Keyed on `ready` for the same reason the link
+  // is — a URL is not a running environment.
   function moving(s) {
-    return s.phase === "Pending" || (s.phase === "Bound" && !s.url && !s.connectionMessage);
+    if (s.instancePhase === "Failed") return false;
+    return s.phase === "Pending" || (s.phase === "Bound" && !s.ready);
   }
 
   // How long to wait before asking again. Eager right after an action, then
