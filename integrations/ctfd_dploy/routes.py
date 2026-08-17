@@ -119,6 +119,29 @@ class Player:
         self.params = params
 
 
+# Characters a param value may contain. An allow-list, not a list of the
+# dangerous ones: the value ends up substituted as raw text into a
+# valuesTemplate whose rendering is then parsed as YAML, so a quote, a newline
+# or a colon in a display name is not a formatting nuisance — it is syntax, and
+# it can add a top-level key to the Helm values of the challenge. Enumerating
+# what YAML treats as special is a bet; enumerating what belongs in a name is
+# not.
+_PARAM_SAFE = re.compile(r"[^A-Za-z0-9 ._@-]")
+_MAX_PARAM_LEN = 64
+
+
+def _safe_param(value):
+    """Normalise a self-asserted profile string into something inert.
+
+    CTFd validates display names and team names for length only (128 chars) and
+    lets players change them freely, so these are attacker-controlled strings
+    that reach the cluster. `Alice O'Brien` becomes `Alice OBrien`: slightly
+    lossy on the display side, which is the right trade against a name that can
+    rewrite a chart's securityContext.
+    """
+    return _PARAM_SAFE.sub("", (value or "").strip())[:_MAX_PARAM_LEN]
+
+
 def _current_player():
     """Resolve the calling competitor, or None when there is no usable session
     (a user in teams mode who hasn't joined a team yet)."""
@@ -143,12 +166,14 @@ def _current_player():
     # Mirror the API's FORWARDED_CLAIMS defaults (sub, preferred_username,
     # email, name, groups) so a valuesTemplate written against `.Params` renders
     # the same whether the request came from the dploy API or from CTFd.
+    # `sub` is built here from an id, so it is inert by construction; every
+    # other value is typed by the player and goes through _safe_param.
     params = {
         "sub": key,
-        "preferred_username": user.name or "",
-        "email": user.email or "",
-        "name": display_name,
-        "groups": groups,
+        "preferred_username": _safe_param(user.name),
+        "email": _safe_param(user.email),
+        "name": _safe_param(display_name),
+        "groups": _safe_param(groups),
     }
     return Player(key, owner, display_name, {k: v for k, v in params.items() if v})
 
