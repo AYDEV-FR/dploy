@@ -3,10 +3,13 @@
 Copyright the Dploy authors.
 SPDX-License-Identifier: MIT
 
-Player routes are session-authenticated (`@authed_only`) and act only on the
-caller's own claim: the owner is derived from the CTFd session, never from
-request input. Admin routes are `@admins_only`. POSTs and DELETEs are
-CSRF-checked by CTFd — the front-end scripts send the `CSRF-Token` header.
+Player routes act only on the caller's own claim: the owner is derived from the
+CTFd session, never from request input. They also carry CTFd's own challenge
+gates — visibility, CTF time window, verified email — and resolve the requested
+challenge through `_visible_challenge`, because a challenge id *is* request
+input and an unreleased challenge must not become a running environment. Admin
+routes are `@admins_only`. POSTs and DELETEs are CSRF-checked by CTFd — the
+front-end scripts send the `CSRF-Token` header.
 
 A CTFd challenge opts into dploy through its **Connection Information** field,
 by putting a JSON object there instead of a connection string:
@@ -31,10 +34,17 @@ import re
 from flask import Blueprint, jsonify, request, send_from_directory
 from flask import render_template_string
 
-from CTFd.models import Challenges
+from CTFd.models import Challenges, Solves
 from CTFd.utils import get_config
-from CTFd.utils.decorators import admins_only, authed_only
-from CTFd.utils.user import get_current_team, get_current_user
+from CTFd.utils.challenges import get_all_challenges
+from CTFd.utils.decorators import (
+    admins_only,
+    authed_only,
+    during_ctf_time_only,
+    require_verified_emails,
+)
+from CTFd.utils.decorators.visibility import check_challenge_visibility
+from CTFd.utils.user import get_current_team, get_current_user, is_admin
 
 from .k8s import (
     CREATED_BY,
@@ -157,6 +167,55 @@ class Binding:
         self.wait_for_pool = wait_for_pool
 
 
+def _requirements_met(challenge):
+    """Whether the caller has solved this challenge's prerequisites.
+
+    Mirrors CTFd's own check in CTFd/api/v1/challenges.py, including the
+    intersection with existing challenge ids — a prerequisite pointing at a
+    deleted challenge must not lock everyone out forever.
+    """
+    requirements = getattr(challenge, "requirements", None)
+    if not requirements:
+        return True
+    prereqs = requirements.get("prerequisites", []) if isinstance(requirements, dict) else []
+    if not prereqs:
+        return True
+    user = get_current_user()
+    if user is None:
+        return False
+    solve_ids = {
+        cid for cid, in Solves.query.with_entities(Solves.challenge_id)
+        .filter_by(account_id=user.account_id).all()
+    }
+    all_ids = {c.id for c in Challenges.query.with_entities(Challenges.id).all()}
+    return solve_ids >= set(prereqs).intersection(all_ids)
+
+
+def _visible_challenge(challenge_id):
+    """The challenge as CTFd would let this caller see it, or None.
+
+    A challenge id arrives from request input, so resolving it with a bare
+    Challenges.query would hand out challenges CTFd itself hides: `hidden` and
+    `locked` states, and challenges gated behind prerequisites the caller has
+    not solved. In a CTF the environment usually *is* the challenge, so that
+    would mean a live box — and its name — before release.
+
+    The state filter comes from get_all_challenges() rather than being spelled
+    out again here: a rule that lives in two places is a rule that drifts, which
+    is exactly how this went wrong the first time. Admins keep the unfiltered
+    view so they can still preview an unreleased challenge.
+    """
+    admin = is_admin()
+    listed = {c.id: c for c in get_all_challenges(admin=admin)}.get(challenge_id)
+    if listed is None:
+        return None
+    if not admin and not _requirements_met(listed):
+        return None
+    # get_all_challenges returns a projection without connection_info, so the
+    # row itself is still needed — but only once the caller is allowed it.
+    return Challenges.query.filter_by(id=challenge_id).first()
+
+
 def _binding_for(challenge_id):
     """Parse a challenge's Connection Information as a dploy request, or return
     None when it is not one.
@@ -165,7 +224,7 @@ def _binding_for(challenge_id):
     challenge" rather than an error: the field's normal use is a connection
     string, and a typo in it must not take the challenge down.
     """
-    ch = Challenges.query.filter_by(id=challenge_id).first()
+    ch = _visible_challenge(challenge_id)
     if ch is None:
         return None
     raw = (ch.connection_info or "").strip()
@@ -199,7 +258,9 @@ def _challenge_id_arg(value):
 
 
 def _challenge_title(challenge_id, fallback):
-    ch = Challenges.query.filter_by(id=challenge_id).first()
+    # Same gate as everywhere else: the name of an unreleased challenge is
+    # itself worth withholding, and this is returned by every player endpoint.
+    ch = _visible_challenge(challenge_id)
     return ch.name if ch is not None else fallback
 
 
@@ -373,6 +434,9 @@ def assets(filename):
 
 
 @plugin_bp.route("/plugins/ctfd_dploy/info", methods=["GET"])
+@check_challenge_visibility
+@during_ctf_time_only
+@require_verified_emails
 @authed_only
 def info():
     """Modal probe, called once per open: is this challenge wired to a dploy
@@ -409,6 +473,9 @@ def info():
 
 
 @plugin_bp.route("/plugins/ctfd_dploy/status", methods=["GET"])
+@check_challenge_visibility
+@during_ctf_time_only
+@require_verified_emails
 @authed_only
 def status():
     """What the modal polls. Read-only: it never files a claim, so a player
@@ -426,6 +493,9 @@ def status():
 
 
 @plugin_bp.route("/plugins/ctfd_dploy/run", methods=["POST"])
+@check_challenge_visibility
+@during_ctf_time_only
+@require_verified_emails
 @authed_only
 def run():
     """File the claim — the whole of "run this instance". Idempotent: clicking
@@ -446,6 +516,9 @@ def run():
 
 
 @plugin_bp.route("/plugins/ctfd_dploy/extend", methods=["POST"])
+@check_challenge_visibility
+@during_ctf_time_only
+@require_verified_emails
 @authed_only
 def extend():
     """Extending is a patch that raises spec.ttlSeconds. There is no extend
@@ -470,6 +543,9 @@ def extend():
 
 
 @plugin_bp.route("/plugins/ctfd_dploy/stop", methods=["POST"])
+@check_challenge_visibility
+@during_ctf_time_only
+@require_verified_emails
 @authed_only
 def stop():
     """Delete the claim. The instance follows through the owner reference, and
