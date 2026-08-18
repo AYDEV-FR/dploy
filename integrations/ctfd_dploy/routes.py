@@ -31,9 +31,6 @@ import json
 import os
 import re
 
-from flask import Blueprint, jsonify, request, send_from_directory
-from flask import render_template_string
-
 from CTFd.models import Challenges, Solves
 from CTFd.utils import get_config
 from CTFd.utils.challenges import get_all_challenges
@@ -45,6 +42,7 @@ from CTFd.utils.decorators import (
 )
 from CTFd.utils.decorators.visibility import check_challenge_visibility
 from CTFd.utils.user import get_current_team, get_current_user, is_admin
+from flask import Blueprint, jsonify, render_template_string, request, send_from_directory
 
 from .k8s import (
     CREATED_BY,
