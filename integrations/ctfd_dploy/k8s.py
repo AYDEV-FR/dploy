@@ -143,16 +143,21 @@ class K8sClient:
                 return None
             raise K8sError(f"patch dployinstanceclaim {name}: {e.reason}") from e
 
-    def delete_claim(self, namespace, name):
+    def delete_claim(self, namespace, name, timeout=None):
         """Delete a claim. A missing claim is a no-op.
 
         Deleting the claim is the only teardown verb there is: the claim owns
         the instance, so the garbage collector cascades, and the instance's own
         finalizer unwinds the HelmRelease and the workload namespace.
+
+        `timeout` bounds the call: callers that delete outside a request (the
+        solve release thread) must not be pinned for minutes by an API server
+        that stopped answering.
         """
+        kwargs = {"_request_timeout": timeout} if timeout else {}
         try:
             self.api.delete_namespaced_custom_object(
-                GROUP, VERSION, namespace, CLAIMS, name
+                GROUP, VERSION, namespace, CLAIMS, name, **kwargs
             )
         except client.ApiException as e:
             if e.status != 404:

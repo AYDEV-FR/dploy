@@ -67,6 +67,7 @@ _TEMPLATES = os.path.join(os.path.dirname(__file__), "templates")
 KEY_TEMPLATE = "template"
 KEY_TTL = "ttlSeconds"
 KEY_WAIT = "waitForPool"
+KEY_STOP_ON_SOLVE = "stopOnSolve"
 
 # Fallback extend step for templates that don't set spec.ttl.extendSeconds. The
 # operator clamps whatever we ask for to the template's real ceiling, so this
@@ -186,10 +187,11 @@ def _current_player():
 class Binding:
     """What a challenge's Connection Information asks for."""
 
-    def __init__(self, template, ttl_seconds, wait_for_pool):
+    def __init__(self, template, ttl_seconds, wait_for_pool, stop_on_solve=True):
         self.template = template
         self.ttl_seconds = ttl_seconds
         self.wait_for_pool = wait_for_pool
+        self.stop_on_solve = stop_on_solve
 
 
 def _requirements_met(challenge):
@@ -242,14 +244,29 @@ def _visible_challenge(challenge_id):
 
 
 def _binding_for(challenge_id):
+    """The dploy request a challenge declares, for a *player* asking about it.
+
+    Gated: the id comes from request input, so the challenge is resolved the way
+    CTFd would resolve it for this caller.
+    """
+    ch = _visible_challenge(challenge_id)
+    return parse_binding(ch) if ch is not None else None
+
+
+def parse_binding(ch):
     """Parse a challenge's Connection Information as a dploy request, or return
     None when it is not one.
+
+    Deliberately ungated, and separate from _binding_for for that reason: the
+    solve release runs on a background thread with no session to authorize
+    against, and needs none — CTFd already accepted the flag, which is the
+    proof of access. Mixing the two is what made the first async attempt fail
+    with "Working outside of request context".
 
     Anything that is not a JSON object naming a template is "not a dploy
     challenge" rather than an error: the field's normal use is a connection
     string, and a typo in it must not take the challenge down.
     """
-    ch = _visible_challenge(challenge_id)
     if ch is None:
         return None
     raw = (ch.connection_info or "").strip()
@@ -271,7 +288,13 @@ def _binding_for(challenge_id):
     except (TypeError, ValueError):
         ttl_seconds = 0
 
-    return Binding(template.strip(), ttl_seconds, bool(spec.get(KEY_WAIT, False)))
+    # Solving the challenge is the natural end of the environment, so tearing it
+    # down is the default: it returns a pool member to the warm set and stops a
+    # solved box burning a quota slot. A challenge that wants the box to survive
+    # its flag — a multi-stage one, or somewhere to keep exploring — sets
+    # "stopOnSolve": false.
+    return Binding(template.strip(), ttl_seconds, bool(spec.get(KEY_WAIT, False)),
+                   bool(spec.get(KEY_STOP_ON_SOLVE, True)))
 
 
 def _challenge_id_arg(value):
