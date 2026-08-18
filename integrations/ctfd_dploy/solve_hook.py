@@ -30,11 +30,10 @@ import queue
 import threading
 import time
 
-from flask import g, has_request_context
-from sqlalchemy import event
-
 from CTFd.models import Solves
 from CTFd.utils import get_config
+from flask import g, has_request_context
+from sqlalchemy import event
 
 log = logging.getLogger(__name__)
 

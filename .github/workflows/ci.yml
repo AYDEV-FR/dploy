@@ -31,6 +31,20 @@ jobs:
           version: latest
           args: --timeout=5m
 
+  # The CTFd plugin is the only Python in the repository, and it grew to the
+  # size where "it imports, therefore it is fine" stopped being good enough.
+  lint-python:
+    name: Lint (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Run ruff
+        uses: astral-sh/ruff-action@v3
+        with:
+          src: integrations/ctfd_dploy
+
   test:
     name: Test
     runs-on: ubuntu-latest
