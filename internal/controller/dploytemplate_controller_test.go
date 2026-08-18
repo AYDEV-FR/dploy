@@ -17,11 +17,14 @@ import (
 // and claimed.
 func countPooled(t *testing.T, ns, templateRef string) (unclaimed, claimed int) {
 	t.Helper()
-	for _, inst := range listInstances(t, ns, client.MatchingLabels{
+	insts := listInstances(t, ns, client.MatchingLabels{
 		LabelTemplate: templateRef,
 		LabelPooled:   "true",
-	}) {
-		if inst.Spec.Owner == "" {
+	})
+	// Indexed rather than ranged by value: a DployInstance is 536 bytes and
+	// this runs per poll in a loop that waits on a pool.
+	for i := range insts {
+		if insts[i].Spec.Owner == "" {
 			unclaimed++
 		} else {
 			claimed++
