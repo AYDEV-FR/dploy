@@ -41,6 +41,7 @@ except Exception:
 
 from CTFd.plugins import register_plugin_script  # noqa: E402
 
+from . import solve_hook  # noqa: E402
 from .routes import plugin_bp  # noqa: E402
 
 
@@ -52,6 +53,10 @@ def load(app):
     registration is needed.
     """
     app.register_blueprint(plugin_bp)
+    # Solving a challenge releases its environment: back to the warm pool, and
+    # off the player's quota. Registered after the blueprint so the teardown can
+    # reuse the plugin's own Kubernetes client.
+    solve_hook.register(app)
     # Player-facing: the deploy/connect/extend/stop panel injected into the
     # challenge modal for challenges tagged `dploy:<template>`.
     register_plugin_script("/plugins/ctfd_dploy/assets/player.js")
