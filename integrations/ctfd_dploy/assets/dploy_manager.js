@@ -101,7 +101,10 @@
         fetch(BASE + "/claims/" + encodeURIComponent(name), {
           method: "DELETE",
           credentials: "same-origin",
-          headers: { "CSRF-Token": csrf() },
+          // CTFd only honours the CSRF-Token header on JSON requests; without
+          // the content type it falls back to looking for a nonce form field
+          // and rejects the call, so the button silently 403s.
+          headers: { "CSRF-Token": csrf(), "Content-Type": "application/json" },
         }).then(loadAll).catch(function (e) { showError(e.message); });
       });
     });
