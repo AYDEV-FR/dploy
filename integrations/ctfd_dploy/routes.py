@@ -160,7 +160,13 @@ def _current_player():
         display_name = user.name or key
         groups = ""
 
-    owner = _sanitize_owner(f"{key}-{display_name}") or key
+    # The owner key is the quota key, so it must be something the player cannot
+    # change. It used to carry the display name for readability — which meant a
+    # rename minted a fresh owner, and with it a fresh allowance: the instances
+    # already running kept the old label, so nothing counted them any more. Two
+    # requests bought a whole new bucket. The readable name still reaches charts
+    # through params["name"] below, where it belongs.
+    owner = _sanitize_owner(key)
 
     # Mirror the API's FORWARDED_CLAIMS defaults (sub, preferred_username,
     # email, name, groups) so a valuesTemplate written against `.Params` renders
