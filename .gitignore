@@ -10,6 +10,9 @@ dploy-operator
 # Test binary
 *.test
 
+# Tooling downloads (envtest control-plane binaries, see `make envtest`)
+/bin/
+
 # Output
 *.out
 

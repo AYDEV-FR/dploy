@@ -9,7 +9,7 @@ from touching the deployment engine directly.
 
 ## Overview
 
-![Dploy architecture: the browser talks to the Dploy API, which writes DployTemplate and DployInstance custom resources; the operator reconciles them into Flux GitRepository/HelmRepository and HelmRelease resources that install the environment into a per-instance workload namespace.](/diagrams/dploy-architecture.svg)
+![Dploy architecture: the browser talks to the Dploy API, which writes DployInstanceClaim custom resources and nothing else; the operator binds each claim to a DployInstance it then owns, and reconciles it into Flux GitRepository/HelmRepository and HelmRelease resources that install the environment into a per-instance workload namespace.](/diagrams/dploy-architecture.svg)
 
 ## Components
 
@@ -19,29 +19,108 @@ A stateless GoFiber server that:
 
 - authenticates requests via **JWT/OIDC** (JWKS, cached 15 min),
 - serves the catalog by listing `DployTemplate` resources,
-- creates/claims/extends/deletes `DployInstance` resources,
+- creates/extends/deletes `DployInstanceClaim` resources — one per (owner, template),
 - serves the embedded web UI.
 
-It has **no Flux permissions** — its RBAC only allows reading `DployTemplate`s and CRUD on
-`DployInstance`s in a single namespace. It physically cannot create a `HelmRelease`.
+That is the whole list. The API decides *who* is asking and *what* they asked for, then writes it
+down; every decision about *what happens next* — which instance, for how long, whether the quota
+allows it — belongs to the operator. Its RBAC says as much: within a single namespace, it reads
+`DployTemplate`s, does CRUD on `DployInstanceClaim`s, and *reads* `DployInstance`s for the Manager
+view. It cannot write an instance, and it cannot create a `HelmRelease`.
+
+Only the claims the deployment lists in `FORWARDED_CLAIMS` are copied out of the token into
+`spec.params`; the rest never leaves the API server.
 
 ### Dploy operator
 
-Two controllers built with controller-runtime:
+Three controllers built with controller-runtime:
 
+- **DployInstanceClaim controller** — turns a request into a running environment. It binds a warm
+  pool member (or provisions one on demand), takes ownership of the instance, anchors the TTL at
+  the binding, enforces the per-owner quota, and projects the instance's status back onto the
+  claim so callers watch one object instead of two.
 - **DployInstance controller** — the core. For each instance it generates an immutable UUID,
   creates the workload namespace, renders the connection URL and Helm values, ensures a Flux
   source + `HelmRelease`, projects the release's status back, and enforces the TTL.
 - **DployTemplate controller** — maintains the **warm pool** for pool-method templates (creating
   unclaimed instances up to `pool.size`) and reports occupancy in the template status.
 
+#### Binding a warm instance
+
+Several users can want the last warm instance at the same moment, so the binding is decided by the
+*Kubernetes* API server, not by the operator's own bookkeeping. The claim controller writes one label —
+`dploy.dev/claim-uid` — onto a candidate instance through a full object update. Optimistic
+concurrency does the rest: a claimer holding a stale copy is rejected with a conflict and moves on
+to the next candidate. Only once that write lands does the winner apply the rest of the binding
+(ownership, owner key, params, TTL), off the contention path.
+
+The instance is then owned by the claim, which is what makes `kubectl delete dployinstanceclaim`
+tear the environment down.
+
+#### Settling the per-owner quota
+
+The same burst breaks a naive quota check. Concurrent claims for one owner each pass the check
+before any of them binds, and each then sees a different partial set of instances — so a single
+count, taken once, lets the cap drift. Instead the operator re-ranks the owner's instances
+(oldest first, keep `limit`) on every reconcile for the first minute after a binding. The rule is
+stable, so once every instance is visible all claims agree on who loses, and the surplus give
+theirs back.
+
+One consequence is visible: a claim can go `Bound` and then `Rejected` a few seconds later. Past
+that window an environment you hold is yours — lowering a quota never reaches back and kills
+something already running.
+
+#### The whole cycle, without the API
+
+Because every decision lives in the operator, the API is optional. A claim is a complete request:
+
+```yaml
+apiVersion: dploy.dev/v1alpha1
+kind: DployInstanceClaim
+metadata:
+  name: john-doe-webterm
+  namespace: dploy-system
+spec:
+  templateRef: webterm
+  owner: john-doe
+  waitForPool: true          # park on an empty pool instead of provisioning around it
+  params:
+    email: john@example.com  # visible to templates as .Params.email
+```
+
+```bash
+kubectl apply -f claim.yaml
+kubectl get dclaim john-doe-webterm -w
+# NAME               TEMPLATE   OWNER      PHASE     INSTANCE          URL
+# john-doe-webterm   webterm    john-doe   Pending
+# john-doe-webterm   webterm    john-doe   Bound     webterm-pool-x9   https://webterm-a1b2c3d4.env.dploy.dev
+
+# Extend: raise the requested lifetime, the operator moves the expiry
+kubectl patch dclaim john-doe-webterm --type=merge -p '{"spec":{"ttlSeconds":7200}}'
+
+# Tear down: the claim owns the instance, which owns the HelmRelease
+kubectl delete dclaim john-doe-webterm
+```
+
 ### Flux
 
 Dploy delegates all deployment to Flux. Because Dploy only exposes `git`/`helm` chart sources,
 the operator always builds a `HelmRelease` whose chart references a **`GitRepository`** or
 **`HelmRepository`** (OCI Helm registries use a `HelmRepository` of type `oci`). The
-`HelmRelease` and its source live in the instance's own namespace (so owner references are
-valid) and install into the per-instance workload namespace via `targetNamespace`.
+`HelmRelease` lives in the instance's own namespace (so owner references are valid) and
+installs into the per-instance workload namespace via `targetNamespace`.
+
+**One source per template, not per instance.** Every instance of a template resolves the same
+URL at the same revision, so the source is a single `<template>-src` object owned by the
+`DployTemplate` and shared by all of its instances. A copy per instance meant source-controller
+cloned one repository once per environment and re-fetched every copy on its own interval — at
+300 environments on a 5m interval, a fetch a second against the forge for content that never
+differs. Measured on kind, a 50-environment burst went from 60 identical `GitRepository`
+objects to 1, and the median time to a usable on-demand environment fell from 38.6s to 24.6s.
+
+The trade-off to know: deleting a template garbage-collects the shared source, including from
+under any claimed instance still running off it. The workload keeps serving — Helm has already
+installed it — but Flux can no longer upgrade or re-render that release.
 
 ### OIDC provider
 
@@ -54,11 +133,17 @@ The operator/API split is enforced by two service accounts:
 
 | Identity | Can do |
 |----------|--------|
-| **API** (namespaced `Role`) | read `dploytemplates`; CRUD `dployinstances` — nothing else |
+| **API** (namespaced `Role`) | read `dploytemplates` and `dployinstances`; CRUD `dployinstanceclaims` — nothing else |
 | **Operator** (`ClusterRole`) | CRUD dploy CRs + status/finalizers, `helmreleases`, Flux sources, namespaces, events |
 
-Only the operator can reach Flux. This makes the trust boundary auditable: a compromised API can
-at most create instance requests, never arbitrary workloads.
+Only the operator can reach Flux, and only the operator can *write* a `DployInstance`. This makes
+the trust boundary auditable: a compromised API can at most file environment requests under
+identities it can already authenticate — never arbitrary workloads, and never a longer TTL or an
+extra environment than the operator grants.
+
+## Claim lifecycle
+
+![DployInstanceClaim lifecycle: a claim is Pending until the operator binds an instance to it, then Bound; it is Rejected when it cannot be satisfied — over quota, unknown or disabled template — and Expired once its TTL elapses, leaving a tombstone that no longer counts against the quota.](/diagrams/dploy-claim-lifecycle.svg)
 
 ## Instance lifecycle
 
@@ -66,17 +151,24 @@ at most create instance requests, never arbitrary workloads.
 
 ### TTL anchoring
 
-- `spec.expiresAt` set by the API is **authoritative** (used at creation and on `/extend`).
-- Otherwise, when an instance first becomes active the operator anchors expiry at
-  `now + ttlSeconds`.
-- `ttlSeconds: -1` means **unlimited**.
-- An **unclaimed pool member never expires** — its clock starts when a user claims it.
+- The clock starts **when the claim binds**, not when it is created: the operator records
+  `status.boundAt` and derives `status.expiresAt` from it. A request that waits ten minutes for a
+  warm instance does not lose ten minutes of its lifetime.
+- **Extending is a patch**, not a verb: raise `spec.ttlSeconds` and the expiry moves with it. The
+  operator clamps the result to `status.maxTTLSeconds` — the template's base TTL plus its full
+  extend budget (`ttl.maxExtends × ttl.extendSeconds`) — so there is no counter to keep in sync and
+  no way to talk the API into a longer life than the catalog allows.
+- `ttlSeconds: -1` means **unlimited**, and is only honored where the template is itself unlimited.
+- An **unclaimed pool member never expires** — its clock starts when a claim binds it.
+- On expiry the operator deletes the instance and leaves the claim behind as an `Expired`
+  tombstone: the owner can see what happened, and it no longer counts against their quota.
 
 ### Teardown
 
 `DployInstance` carries a finalizer (`dploy.dev/instance-cleanup`). On deletion the operator
 removes the `HelmRelease` (waiting for Flux to finish the Helm uninstall), then deletes the
-workload namespace. The Flux source is owner-referenced and garbage-collected.
+workload namespace. The Flux source is left alone — it belongs to the template and is shared
+with every other instance of it; it is garbage-collected when the template goes.
 
 ## Labels & annotations
 
@@ -87,9 +179,13 @@ labels:
   dploy.dev/template: "webterm"    # source template
   dploy.dev/instance: "a1b2c3d4"   # short UUID
   dploy.dev/pooled: "true"         # warm-pool members only
-annotations:
-  dploy.dev/extend-count: "2"      # API-managed TTL extension counter
+  dploy.dev/claim: "john-doe-webterm"                       # bound claim (informational)
+  dploy.dev/claim-uid: "3f2b1c9a-..."                       # the binding itself
 ```
+
+`dploy.dev/claim-uid` is the one that matters: writing it is how a claim wins an instance, and
+reading it back is how the operator recovers a binding after a restart. It keys on the UID rather
+than the name because names can be recycled and UIDs cannot.
 
 ## Value & URL templating
 
@@ -105,8 +201,7 @@ The data context exposes:
 | `.URL` | resolved connection URL (available to `valuesTemplate`) |
 | `.Namespace` | workload namespace |
 | `.Template` | the `DployTemplate` object |
-| `.Params` | request parameters |
-| `.Claims` | the requester's JWT claims |
+| `.Params` | request parameters plus the forwarded JWT claims — the only requester-supplied data a template sees |
 | `.Config.Values` | `OperatorConfig.spec.values` |
 
 The rendered values YAML is converted to JSON and set as the `HelmRelease`'s `spec.values`.

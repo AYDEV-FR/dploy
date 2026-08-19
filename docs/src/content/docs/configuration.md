@@ -23,6 +23,7 @@ Dploy has two configuration surfaces:
 |----------|---------|-------------|
 | `JWT_AUDIENCE` | `dploy` | Expected JWT `aud` claim |
 | `JWT_USERNAME_CLAIM` | `name` | Claim used as the username |
+| `FORWARDED_CLAIMS` | `sub,preferred_username,email,name,groups` | The only claims copied out of the token into a `DployInstanceClaim`, where templates read them as `.Params`. Everything else stops at the API server |
 | `OIDC_ISSUER` | `$JWT_ISSUER` | OIDC issuer (internal, for token exchange) |
 | `OIDC_PUBLIC_ISSUER` | `$OIDC_ISSUER` | OIDC issuer used for browser redirects |
 | `OIDC_CLIENT_ID` | `dploy` | OIDC client ID |
@@ -33,9 +34,9 @@ Dploy has two configuration surfaces:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DPLOY_NAMESPACE` | `dploy-system` | Namespace where `DployTemplate`/`DployInstance` CRs live |
-| `MAX_ENVIRONMENTS_PER_USER` | `5` | Per-user quota (a template may override it) |
-| `DEFAULT_TTL` | `86400` | Fallback initial TTL in seconds |
+| `DPLOY_NAMESPACE` | `dploy-system` | Namespace where the dploy CRs live |
+| `MAX_ENVIRONMENTS_PER_USER` | `5` | Displayed quota. The cap the operator actually enforces comes from `OperatorConfig.defaults.maxInstancesPerUser` (or the template's override) |
+| `DEFAULT_TTL` | `86400` | Fallback initial TTL in seconds, for display. The operator resolves the real one |
 | `EXTEND_TTL` | `7200` | Fallback extension granted per `/extend` |
 
 ### Server
@@ -92,7 +93,7 @@ spec:
   defaults:
     ttlSeconds: 86400                   # initial TTL (24 h)
     extendSeconds: 7200                 # TTL bonus per /extend call (2 h)
-    maxExtends: 0                       # 0 = unlimited extensions
+    maxExtends: 3                       # -1 = unlimited; unset falls back to 3
     maxInstancesPerUser: 5              # per-owner quota
 
   # Free-form map exposed to value templates as `.Config.Values`. Anything you
@@ -116,7 +117,7 @@ spec:
 | `connectionMessageTemplate` | Cluster default instructions template (when `instructions`) | — |
 | `defaults.ttlSeconds` | Default TTL for a new instance | `86400` |
 | `defaults.extendSeconds` | Seconds added per `/extend` call | `7200` |
-| `defaults.maxExtends` | Maximum extensions allowed (`0` = unlimited) | `0` |
+| `defaults.maxExtends` | Maximum extensions allowed (`-1` = unlimited) | `3` |
 | `defaults.maxInstancesPerUser` | Per-owner quota (sanitized owner key) | `5` |
 | `values` | Free-form map exposed as `.Config.Values` | `{}` |
 
@@ -133,8 +134,7 @@ spec:
 | `.URL` / `.ConnectionURL` | `string` | Set after `connectionURLTemplate` renders; only available in `valuesTemplate` and `connectionMessageTemplate` |
 | `.Namespace` | `string` | The instance's workload namespace |
 | `.Template` | `*DployTemplate` | Full template spec, useful for `{{ .Template.Name }}` / `{{ .Template.Spec.X }}` |
-| `.Params` | `map[string]string` | Request-supplied params (nil in pool — anonymity) |
-| `.Claims` | `map[string]any` | Requester's JWT claims (empty in pool — anonymity) |
+| `.Params` | `map[string]string` | The whole request context: the params the template declares, merged with the claims listed in `FORWARDED_CLAIMS`. The raw token never reaches the cluster (nil in pool — anonymity) |
 | `.Config.Values` | `map[string]any` | `OperatorConfig.spec.values` |
 
 ### Overriding `connectionURLTemplate` per template
@@ -186,5 +186,6 @@ John.Doe@example.com → john-doe-example-com
 | Workload namespace | `<owner>-<name>-<uid>` | `john-doe-vscode-a1b2c3d4` | `pool-webshell-c7218ff8` |
 | Default `Host` | `<name>-<uid>.<baseDomain>` | `vscode-a1b2c3d4.env.dploy.dev` | `webshell-c7218ff8.env.dploy.dev` |
 | `DployInstance` (on-demand) | `<owner>-<template>` | `john-doe-vscode` | — (pool members get random suffixes: `webshell-pool-XXXXX`) |
+| Flux source (per **template**) | `<template>-src` | `vscode-src` | `webshell-src` |
 
-The UUID is 8 hex characters, generated once by the operator at the first reconcile and stored immutably in `status.uuid`. The workload namespace uses `pool` as its owner segment for unclaimed pool members; the `Host` template segment always reflects the `DployTemplate` name regardless of mode, so `webshell-<uid>` and `kasm-<uid>` are visibly distinct even before they're claimed.
+The UUID is 8 hex characters, generated once by the operator at the first reconcile and stored immutably in `status.uuid`. The workload namespace uses `pool` as its owner segment for pool members, and **keeps it after they are claimed** — the namespace is created when the instance is provisioned, long before an owner exists, and a namespace cannot be renamed. Look at `dploy.dev/owner` on the instance, not at the namespace name, to see who holds a pooled environment; the `Host` template segment always reflects the `DployTemplate` name regardless of mode, so `webshell-<uid>` and `kasm-<uid>` are visibly distinct even before they're claimed.

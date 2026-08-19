@@ -1,0 +1,5 @@
+{
+  "name": "Dploy",
+  "route": "/admin/plugins/ctfd_dploy",
+  "version": "0.2.0"
+}

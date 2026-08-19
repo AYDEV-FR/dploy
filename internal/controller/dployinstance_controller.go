@@ -10,7 +10,6 @@ import (
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
-	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -19,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/yaml"
 
@@ -31,14 +31,26 @@ const (
 	provisioningRequeue = 15 * time.Second
 	failureRequeue      = 30 * time.Second
 	deletionRequeue     = 5 * time.Second
+
+	// instanceMaxConcurrentReconciles matches the claim controller's default.
+	// A claim that binds instantly still waits on the instance being materialized
+	// before it reports a URL, so a single instance worker would put the whole
+	// burst behind one queue.
+	instanceMaxConcurrentReconciles = 4
 )
 
-// DployInstanceReconciler materializes a DployInstance into a Flux source
-// (GitRepository/HelmRepository) plus a HelmRelease, projects their observed
-// status back onto the instance, and enforces the instance TTL.
+// DployInstanceReconciler materializes a DployInstance into a HelmRelease
+// pointing at its template's shared Flux source (GitRepository/HelmRepository),
+// projects the observed status back onto the instance, and enforces the TTL.
 type DployInstanceReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// MaxConcurrentReconciles bounds how many instances are materialized at once.
+	// Instances are independent — each renders its own values and writes its own
+	// namespace and HelmRelease — so serializing them only adds latency to a
+	// burst. 0 falls back to instanceMaxConcurrentReconciles.
+	MaxConcurrentReconciles int
 }
 
 // +kubebuilder:rbac:groups=dploy.dev,resources=dployinstances,verbs=get;list;watch;create;update;patch;delete
@@ -63,9 +75,12 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	// Ensure the finalizer and management labels in a single metadata update.
+	// A NotFound here means the instance was deleted mid-reconcile — a claim
+	// releasing an over-quota binding, or a TTL expiring — which is an outcome,
+	// not a failure.
 	if r.ensureMeta(&inst) {
 		if err := r.Update(ctx, &inst); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -108,10 +123,7 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	inst.Status.Namespace = targetNS
 	inst.Status.Engine = dployv1alpha1.EngineFlux
 
-	data, err := r.buildData(&inst, &tmpl, eff, targetNS)
-	if err != nil {
-		return r.fail(ctx, original, &inst, "ClaimsDecodeError", err.Error())
-	}
+	data := r.buildData(&inst, &tmpl, eff, targetNS)
 
 	// Resolve the connection URL: template override → config default → fallback host.
 	url := "https://" + data.Host
@@ -162,10 +174,23 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// Materialize: workload namespace → Flux source → HelmRelease.
 	if err := r.ensureNamespace(ctx, targetNS, &inst); err != nil {
+		if isCreateRace(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return r.fail(ctx, original, &inst, "NamespaceError", err.Error())
 	}
-	srcKind, srcName, err := r.ensureSource(ctx, &inst, &tmpl, eff)
+	srcKind, srcName, err := r.ensureSource(ctx, &tmpl, eff)
 	if err != nil {
+		// Losing a race for a shared object is not a broken environment. The
+		// source is one object per template now, so filling a pool has every
+		// instance reconcile reaching for the same one at once and all but the
+		// first getting AlreadyExists. Reporting that as a failure put a
+		// perfectly healthy environment in Failed for a full requeue — the
+		// player read "Provisioning failed" for thirty seconds while nothing
+		// was wrong.
+		if isCreateRace(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return r.fail(ctx, original, &inst, "SourceError", err.Error())
 	}
 	if err := r.ensureHelmRelease(ctx, &inst, &tmpl, eff, srcKind, srcName, targetNS, valuesJSON); err != nil {
@@ -252,6 +277,16 @@ func (r *DployInstanceReconciler) reconcileDelete(ctx context.Context, inst *dpl
 	return ctrl.Result{}, nil
 }
 
+// isCreateRace reports whether an error is another reconcile having got there
+// first. Both forms are expected on objects shared between instances — a
+// template's Flux source, and a workload namespace whose creation the cache has
+// not caught up with — and both mean "retry", never "this environment failed".
+//
+// apierrors unwraps, so this survives the %w wrapping the ensure helpers add.
+func isCreateRace(err error) bool {
+	return apierrors.IsAlreadyExists(err) || apierrors.IsConflict(err)
+}
+
 // ensureMeta adds the finalizer and management labels, returning true if the
 // object's metadata changed and must be persisted.
 func (r *DployInstanceReconciler) ensureMeta(inst *dployv1alpha1.DployInstance) bool {
@@ -282,21 +317,16 @@ func (r *DployInstanceReconciler) ensureMeta(inst *dployv1alpha1.DployInstance) 
 	return changed
 }
 
-func (r *DployInstanceReconciler) buildData(inst *dployv1alpha1.DployInstance, tmpl *dployv1alpha1.DployTemplate, eff operatorconfig.Effective, targetNS string) (*templating.Data, error) {
+func (r *DployInstanceReconciler) buildData(inst *dployv1alpha1.DployInstance, tmpl *dployv1alpha1.DployTemplate, eff operatorconfig.Effective, targetNS string) *templating.Data {
 	owner := inst.Spec.Owner
-	claims, err := templating.ClaimsMap(inst.Spec.Claims)
-	if err != nil {
-		return nil, err
-	}
 	params := inst.Spec.Params
 
-	// Pool instances are anonymous: owner, claims and params are never exposed to
-	// the templates, so a warm instance is identical for everyone and claiming it
-	// does not reconfigure the workload (the catalog enforces that pool templates
-	// don't reference .Owner/.Claims/.Params and declare no parameters).
+	// Pool instances are anonymous: owner and params are never exposed to the
+	// templates, so a warm instance is identical for everyone and claiming it does
+	// not reconfigure the workload (the catalog enforces that pool templates don't
+	// reference .Owner/.Params and declare no parameters).
 	if inst.Spec.Pooled {
 		owner = ""
-		claims = map[string]any{}
 		params = nil
 	}
 
@@ -308,9 +338,8 @@ func (r *DployInstanceReconciler) buildData(inst *dployv1alpha1.DployInstance, t
 		Namespace:  targetNS,
 		Template:   tmpl,
 		Params:     params,
-		Claims:     claims,
 		Config:     templating.Config{Values: eff.Values},
-	}, nil
+	}
 }
 
 // applyTTL resolves the effective expiry, stamps status.ExpiresAt, and deletes
@@ -383,21 +412,37 @@ func (r *DployInstanceReconciler) fail(ctx context.Context, original, inst *dplo
 	return ctrl.Result{RequeueAfter: failureRequeue}, nil
 }
 
+// patchStatus writes the observed state. Losing the object between reading and
+// patching it is normal — it may have just been deleted — so NotFound is not an
+// error worth retrying or logging.
 func (r *DployInstanceReconciler) patchStatus(ctx context.Context, original, inst *dployv1alpha1.DployInstance) error {
 	inst.Status.ObservedGeneration = inst.Generation
 	if err := r.Status().Patch(ctx, inst, client.MergeFrom(original)); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("patch DployInstance status: %w", err)
 	}
 	return nil
 }
 
 // SetupWithManager registers the controller with the manager.
+//
+// The Flux source is no longer owned by the instance — it is shared per template
+// — so there is nothing to Owns() there. Nothing is lost: helm-controller
+// watches the source itself and reflects a source that is missing, stalled or
+// newly ready into the HelmRelease's conditions, which this controller does
+// watch. The HelmRelease is the instance's single proxy for everything
+// downstream of it.
 func (r *DployInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	workers := r.MaxConcurrentReconciles
+	if workers <= 0 {
+		workers = instanceMaxConcurrentReconciles
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&dployv1alpha1.DployInstance{}).
 		Owns(&helmv2.HelmRelease{}).
-		Owns(&sourcev1.GitRepository{}).
-		Owns(&sourcev1.HelmRepository{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: workers}).
 		Named("dployinstance").
 		Complete(r)
 }

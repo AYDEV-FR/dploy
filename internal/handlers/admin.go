@@ -4,6 +4,7 @@ import (
 	"sort"
 	"time"
 
+	dployv1alpha1 "github.com/AYDEV-FR/dploy/api/v1alpha1"
 	"github.com/AYDEV-FR/dploy/internal/kube"
 	"github.com/AYDEV-FR/dploy/internal/models"
 	"github.com/gofiber/fiber/v2"
@@ -20,9 +21,13 @@ func NewAdminHandler(kubeClient *kube.Client) *AdminHandler {
 }
 
 // ListAllInstances answers `GET /api/admin/instances`: every DployInstance
-// across all owners (including pool members), shaped like `kubectl get
-// dployinstance` for the Manager UI's table. Sorted by template then name so
-// the order is stable across reloads.
+// across all owners (including unclaimed warm pool members), shaped like
+// `kubectl get dployinstance` for the Manager UI's table. Sorted by template then
+// name so the order is stable across reloads.
+//
+// This is the one read the API makes against instances, and it is read-only: an
+// admin needs to see the pool and the workload namespaces, which claims alone
+// cannot show. Each row names the claim holding it, so the two views line up.
 func (h *AdminHandler) ListAllInstances(c *fiber.Ctx) error {
 	instances, err := h.kubeClient.ListAllInstances(c.Context())
 	if err != nil {
@@ -40,7 +45,7 @@ func (h *AdminHandler) ListAllInstances(c *fiber.Ctx) error {
 		inst := &instances[i]
 		phase := string(inst.Status.Phase)
 		if phase == "" {
-			phase = "Pending"
+			phase = string(dployv1alpha1.PhasePending)
 		}
 		out = append(out, models.AdminInstanceRow{
 			Name:        inst.Name,
@@ -51,6 +56,7 @@ func (h *AdminHandler) ListAllInstances(c *fiber.Ctx) error {
 			ExpiresAt:   instanceExpiresAt(inst),
 			CreatedAt:   inst.CreationTimestamp.UTC().Format(time.RFC3339),
 			Namespace:   inst.Status.Namespace,
+			Claim:       inst.Labels[dployv1alpha1.LabelClaim],
 			UUID:        inst.Status.UUID,
 			IsUnlimited: inst.Spec.TTLSeconds == -1,
 		})
@@ -59,6 +65,20 @@ func (h *AdminHandler) ListAllInstances(c *fiber.Ctx) error {
 		Instances: out,
 		Count:     len(out),
 	})
+}
+
+// instanceExpiresAt formats an instance's effective expiry, preferring the
+// operator-observed value over the requested one. Empty means unlimited, or a
+// warm pool member whose clock has not started.
+func instanceExpiresAt(inst *dployv1alpha1.DployInstance) string {
+	t := inst.Status.ExpiresAt
+	if t == nil {
+		t = inst.Spec.ExpiresAt
+	}
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // ListAllTemplates answers `GET /api/admin/templates`: every DployTemplate

@@ -26,6 +26,7 @@ rules:
 - apiGroups:
   - dploy.dev
   resources:
+  - dployinstanceclaims
   - dployinstances
   - dploytemplates
   - operatorconfigs
@@ -40,6 +41,7 @@ rules:
 - apiGroups:
   - dploy.dev
   resources:
+  - dployinstanceclaims/finalizers
   - dployinstances/finalizers
   - dploytemplates/finalizers
   verbs:
@@ -47,6 +49,7 @@ rules:
 - apiGroups:
   - dploy.dev
   resources:
+  - dployinstanceclaims/status
   - dployinstances/status
   - dploytemplates/status
   - operatorconfigs/status

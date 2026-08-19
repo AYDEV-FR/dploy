@@ -2,7 +2,6 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // InstancePhase is a high-level summary of a DployInstance's lifecycle.
@@ -36,13 +35,10 @@ type DployInstanceSpec struct {
 	// +optional
 	Owner string `json:"owner,omitempty"`
 
-	// Claims is a snapshot of the requester's JWT claims, exposed to value templates as `.Claims`.
-	// +kubebuilder:validation:Schemaless
-	// +kubebuilder:pruning:PreserveUnknownFields
-	// +optional
-	Claims *runtime.RawExtension `json:"claims,omitempty"`
-
-	// Params holds request-supplied parameter values, exposed to value templates as `.Params`.
+	// Params is the request context exposed to value templates as `.Params`: the
+	// parameters the template declares, merged with the JWT claims the API server
+	// forwards. It is the only requester-supplied data an instance carries — the
+	// raw bearer token stops at the API and never reaches the cluster.
 	// +optional
 	Params map[string]string `json:"params,omitempty"`
 

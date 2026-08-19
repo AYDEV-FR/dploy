@@ -10,9 +10,12 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dployv1alpha1 "github.com/AYDEV-FR/dploy/api/v1alpha1"
 	"github.com/AYDEV-FR/dploy/internal/operatorconfig"
@@ -68,6 +71,22 @@ func (r *DployTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
+	// The fill loop runs to completion inside a single reconcile, and that is what
+	// keeps it from over-filling. Every create it issues wakes this controller
+	// again through the instance watch, and a re-reconcile running against a cache
+	// that still missed those creates would count the same empty slot twice and
+	// fill it twice — nothing downstream would undo it, since the extra members
+	// are legitimate warm instances. It does not happen because the creates are
+	// round trips and their watch events land while the loop is still running: the
+	// cache converges during the burst rather than after it, and the work queue
+	// collapses the resulting events into one follow-up reconcile.
+	//
+	// Two changes would break that and force tracking creates in flight (the
+	// "expectations" pattern): returning early with creates outstanding — a refill
+	// rate limit is the obvious way to end up there — or issuing the creates off
+	// the reconcile goroutine. TestPoolFillsExactlyOnce pins the property, and
+	// pool_kind_test.go stresses it against a real API server, where the cache lag
+	// is real rather than in-process.
 	created := 0
 	if isPoolActive(&tmpl) {
 		eff, err := operatorconfig.Resolve(ctx, r.Client)
@@ -142,10 +161,26 @@ func resolveInstanceTTL(tmpl *dployv1alpha1.DployTemplate, eff operatorconfig.Ef
 }
 
 // SetupWithManager registers the controller with the manager.
+//
+// Instances are watched by label rather than by ownership: claiming a warm pool
+// member hands its controller reference over to the DployInstanceClaim, so an
+// Owns() watch would go quiet on exactly the events that should refill the pool.
 func (r *DployTemplateReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&dployv1alpha1.DployTemplate{}).
-		Owns(&dployv1alpha1.DployInstance{}).
+		Watches(&dployv1alpha1.DployInstance{}, handler.EnqueueRequestsFromMapFunc(templateForInstance)).
 		Named("dploytemplate").
 		Complete(r)
+}
+
+// templateForInstance routes an instance event back to the template it derives from.
+func templateForInstance(_ context.Context, obj client.Object) []reconcile.Request {
+	inst, ok := obj.(*dployv1alpha1.DployInstance)
+	if !ok || inst.Spec.TemplateRef == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: inst.Namespace,
+		Name:      inst.Spec.TemplateRef,
+	}}}
 }

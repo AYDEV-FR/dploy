@@ -1,0 +1,34 @@
+# Lint configuration for the CTFd plugin — the only Python in this repository.
+#
+# Scoped to the plugin rather than the repo root so it cannot start policing the
+# throwaway scripts people keep in dev/.
+line-length = 100
+target-version = "py311"   # the CTFd image's interpreter
+
+# The kubernetes client is vendored in at image build time; it is not ours to
+# lint and it is not in the repository either.
+exclude = ["_vendor"]
+
+[lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes — the ones that are actual bugs
+    "I",        # import order
+    "B",        # bugbear: mutable defaults, shadowed loop vars, except-pass…
+    "UP",       # constructs that are obsolete on the target version
+    "C4",       # comprehensions
+    "SIM",      # simplifications that genuinely read better
+    "RET",      # returns
+]
+ignore = [
+    # The plugin catches broad exceptions on purpose in two places, and both are
+    # load-bearing: a teardown must never break a flag submission, and a
+    # Kubernetes hiccup must never take a challenge page down. Each site says so
+    # in a comment.
+    "BLE001",
+]
+
+[lint.per-file-ignores]
+# Imports there run after a sys.path insertion and a urllib3 compatibility shim,
+# which is exactly why they are not at the top of the file.
+"__init__.py" = ["E402"]

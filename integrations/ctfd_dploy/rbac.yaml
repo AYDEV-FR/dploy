@@ -1,0 +1,49 @@
+# RBAC for the Dploy CTFd plugin.
+#
+# The plugin writes DployInstanceClaim objects itself, so CTFd's service
+# account — not the dploy API's — needs the permissions. The Role is filed in
+# dploy's namespace (that is where the CRs live) and the RoleBinding names a
+# subject from CTFd's namespace, which is legal and is what keeps this to a
+# namespaced grant rather than a ClusterRole.
+#
+# Apply after substituting the two namespaces and the service-account name:
+#
+#   kubectl apply -f rbac.yaml
+#
+# Note what is *not* here: no access to dployinstances, namespaces, secrets or
+# Flux objects. A claim is the whole interface, and the operator does the rest
+# under its own identity.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ctfd-dploy-plugin
+  namespace: dploy-system # where the DployTemplate/DployInstanceClaim CRs live
+rules:
+  # Read the catalog: the modal resolves `dploy:<template>` to a real template
+  # and refuses early when it is missing or disabled.
+  - apiGroups: ["dploy.dev"]
+    resources: ["dploytemplates"]
+    verbs: ["get", "list"]
+  # The claim is the request: create it to deploy, patch it to extend, delete
+  # it to stop. Deleting cascades to the instance through the owner reference.
+  - apiGroups: ["dploy.dev"]
+    resources: ["dployinstanceclaims"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ctfd-dploy-plugin
+  namespace: dploy-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ctfd-dploy-plugin
+subjects:
+  # The dploy-charts `ctfd` chart declares no service account, so the pod runs
+  # as `default` in its own namespace unless you give it one. Check before
+  # assuming a name here — a binding to an account nothing runs as fails as a
+  # 403 from the plugin, not as an error at apply time.
+  - kind: ServiceAccount
+    name: default
+    namespace: ctfd # CTFd's namespace

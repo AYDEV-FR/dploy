@@ -72,6 +72,39 @@ func TestTranslateHelmRelease(t *testing.T) {
 	if st := translateHelmRelease(cond(metav1.ConditionFalse)); st.readiness != readinessFailed || st.health != "Degraded" {
 		t.Errorf("false: got readiness=%v health=%q", st.readiness, st.health)
 	}
+
+	// Flux keeps Ready=False for the whole install and says so through the
+	// reason. Reading the status alone reported Degraded on a healthy install a
+	// second after it began — visible to a player as a failure that then fixed
+	// itself.
+	withReason := func(reason string) *helmv2.HelmRelease {
+		hr := &helmv2.HelmRelease{}
+		hr.Status.Conditions = []metav1.Condition{{
+			Type: fluxmeta.ReadyCondition, Status: metav1.ConditionFalse, Reason: reason,
+		}}
+		return hr
+	}
+	for _, reason := range []string{fluxmeta.ProgressingReason, fluxmeta.ProgressingWithRetryReason} {
+		if st := translateHelmRelease(withReason(reason)); st.readiness != readinessInProgress || st.health != "Progressing" {
+			t.Errorf("false/%s: want inProgress+Progressing, got readiness=%v health=%q",
+				reason, st.readiness, st.health)
+		}
+	}
+
+	// A Reconciling condition means it is still working, whatever a stale Ready
+	// reason says.
+	reconciling := withReason("InstallFailed")
+	reconciling.Status.Conditions = append(reconciling.Status.Conditions, metav1.Condition{
+		Type: fluxmeta.ReconcilingCondition, Status: metav1.ConditionTrue, Reason: "Progressing",
+	})
+	if st := translateHelmRelease(reconciling); st.readiness != readinessInProgress {
+		t.Errorf("reconciling: want inProgress, got %v", st.readiness)
+	}
+
+	// And a release that has genuinely given up is still a failure.
+	if st := translateHelmRelease(withReason("InstallFailed")); st.readiness != readinessFailed || st.health != "Degraded" {
+		t.Errorf("install failed: want failed+Degraded, got readiness=%v health=%q", st.readiness, st.health)
+	}
 }
 
 func TestPhaseFor(t *testing.T) {

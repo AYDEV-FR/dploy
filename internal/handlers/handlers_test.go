@@ -13,51 +13,87 @@ import (
 	"github.com/AYDEV-FR/dploy/internal/config"
 )
 
-func TestInstanceStatus(t *testing.T) {
-	cases := map[dployv1alpha1.InstancePhase]string{
+func TestClaimStatus(t *testing.T) {
+	// A claim that isn't bound reports its own phase; the UI has no instance to
+	// look at, which is the point of projecting everything onto the claim.
+	claimPhases := map[dployv1alpha1.ClaimPhase]string{
+		dployv1alpha1.ClaimPending:  "pending",
+		dployv1alpha1.ClaimRejected: "Degraded",
+		dployv1alpha1.ClaimExpired:  "Deleting",
+		"":                          "pending",
+	}
+	for phase, want := range claimPhases {
+		c := &dployv1alpha1.DployInstanceClaim{}
+		c.Status.Phase = phase
+		if got := claimStatus(c); got != want {
+			t.Errorf("claim phase %q: got %q, want %q", phase, got, want)
+		}
+	}
+
+	// Once bound, the instance's phase drives the status.
+	instancePhases := map[dployv1alpha1.InstancePhase]string{
 		dployv1alpha1.PhaseProvisioning: "Progressing",
 		dployv1alpha1.PhaseFailed:       "Degraded",
 		dployv1alpha1.PhaseExpiring:     "Deleting",
 		dployv1alpha1.PhasePending:      "pending",
 		"":                              "pending",
 	}
-	for phase, want := range cases {
-		inst := &dployv1alpha1.DployInstance{}
-		inst.Status.Phase = phase
-		if got := instanceStatus(inst); got != want {
-			t.Errorf("phase %q: got %q, want %q", phase, got, want)
+	for phase, want := range instancePhases {
+		c := &dployv1alpha1.DployInstanceClaim{}
+		c.Status.Phase = dployv1alpha1.ClaimBound
+		c.Status.InstancePhase = phase
+		if got := claimStatus(c); got != want {
+			t.Errorf("instance phase %q: got %q, want %q", phase, got, want)
 		}
 	}
 
-	// Ready uses reported health when present.
-	ready := &dployv1alpha1.DployInstance{}
-	ready.Status.Phase = dployv1alpha1.PhaseReady
-	ready.Status.Health = "Healthy"
-	if got := instanceStatus(ready); got != "Healthy" {
-		t.Errorf("ready: got %q", got)
+	// Ready uses the engine-reported health when present.
+	ready := &dployv1alpha1.DployInstanceClaim{}
+	ready.Status.Phase = dployv1alpha1.ClaimBound
+	ready.Status.InstancePhase = dployv1alpha1.PhaseClaimed
+	ready.Status.Health = "Degraded"
+	if got := claimStatus(ready); got != "Degraded" {
+		t.Errorf("claimed with health: got %q", got)
 	}
 	ready.Status.Health = ""
-	if got := instanceStatus(ready); got != "Healthy" {
-		t.Errorf("ready without health: got %q", got)
+	if got := claimStatus(ready); got != "Healthy" {
+		t.Errorf("claimed without health: got %q", got)
 	}
 }
 
-func TestInstanceExpiresAt(t *testing.T) {
-	inst := &dployv1alpha1.DployInstance{}
-	if instanceExpiresAt(inst) != "" {
-		t.Error("no expiry should be empty")
+func TestClaimExpiresAt(t *testing.T) {
+	claim := &dployv1alpha1.DployInstanceClaim{}
+	if claimExpiresAt(claim) != "" {
+		t.Error("an unbound claim has no expiry")
 	}
-	// Spec expiry used before the operator mirrors it to status.
-	spec := metav1.NewTime(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
-	inst.Spec.ExpiresAt = &spec
-	if got := instanceExpiresAt(inst); got != "2026-01-02T03:04:05Z" {
-		t.Errorf("spec expiry: got %q", got)
+	exp := metav1.NewTime(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
+	claim.Status.ExpiresAt = &exp
+	if got := claimExpiresAt(claim); got != "2026-01-02T03:04:05Z" {
+		t.Errorf("expiry: got %q", got)
 	}
-	// Status expiry takes precedence.
-	status := metav1.NewTime(time.Date(2027, 6, 7, 8, 9, 10, 0, time.UTC))
-	inst.Status.ExpiresAt = &status
-	if got := instanceExpiresAt(inst); got != "2027-06-07T08:09:10Z" {
-		t.Errorf("status expiry: got %q", got)
+}
+
+func TestClaimMessage(t *testing.T) {
+	claim := &dployv1alpha1.DployInstanceClaim{}
+	claim.Status.Phase = dployv1alpha1.ClaimPending
+	claim.Status.Conditions = []metav1.Condition{{
+		Type:    dployv1alpha1.ConditionBound,
+		Status:  metav1.ConditionFalse,
+		Reason:  "PoolExhausted",
+		Message: "waiting for a warm instance",
+	}}
+	if got := claimMessage(claim); got != "waiting for a warm instance" {
+		t.Errorf("pending message: got %q", got)
+	}
+
+	// A running environment has nothing to explain.
+	claim.Status.Phase = dployv1alpha1.ClaimBound
+	if got := claimMessage(claim); got != "" {
+		t.Errorf("bound claim should have no message, got %q", got)
+	}
+
+	if got := claimMessage(&dployv1alpha1.DployInstanceClaim{}); got != "" {
+		t.Errorf("no condition should yield no message, got %q", got)
 	}
 }
 

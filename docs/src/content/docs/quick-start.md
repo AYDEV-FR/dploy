@@ -155,9 +155,10 @@ Now call the API as `admin`:
 # Public catalog (no auth)
 curl -s http://localhost:8080/api/environments/available | jq
 
-# Launch podinfo — creates a DployInstance owned by "admin"
+# Launch podinfo — files a DployInstanceClaim owned by "admin"
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/run/podinfo | jq
 # { "uuid": "…", "status": "pending", "url": "…", "owner": "admin" }
+# The call returns as soon as the request is recorded; poll /status until the URL appears.
 
 # Your environments
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/environments | jq
@@ -168,37 +169,44 @@ You can also open **http://localhost:8080/** in a browser, click **Login with SS
 at Dex with `admin@dploy.dev` / `password`.
 :::
 
-Watch the operator converge the instance and materialize a Flux `HelmRelease`:
+Watch the claim get bound, then the operator converge the instance into a Flux `HelmRelease`:
 
 ```bash
-kubectl get dployinstance -n dploy-system -w
+kubectl get dployinstanceclaim -n dploy-system -w   # or: kubectl get dclaim -n dploy-system -w
+kubectl get dployinstance -n dploy-system
 flux get helmreleases -A
 ```
 
+The claim carries a projection of everything the instance reports — phase, URL, expiry — so it is
+the one object you need to watch.
+
 :::note[Operator-direct alternative]
-You can skip the API entirely and drive the operator with `kubectl` by applying a `DployInstance`
-yourself (set `spec.owner` to any key) — handy for testing without a token:
+You can skip the API entirely and drive the operator with `kubectl` by applying a claim yourself
+(set `spec.owner` to any key) — handy for testing without a token. The operator does exactly what
+it would for an API-filed request: quota, binding, TTL and teardown all behave identically.
 
 ```bash
 kubectl apply -f - <<'EOF'
 apiVersion: dploy.dev/v1alpha1
-kind: DployInstance
+kind: DployInstanceClaim
 metadata:
   name: alice-podinfo
   namespace: dploy-system
-  labels: { dploy.dev/owner: alice, dploy.dev/template: podinfo }
 spec:
   templateRef: podinfo
   owner: alice
   ttlSeconds: 3600
 EOF
+
+kubectl get dclaim alice-podinfo -n dploy-system -o wide
 ```
 :::
 
 ## 7. Open it
 
 ```bash
-NS=$(kubectl get dployinstance admin-podinfo -n dploy-system -o jsonpath='{.status.namespace}')
+INST=$(kubectl get dclaim admin-podinfo -n dploy-system -o jsonpath='{.status.instanceRef}')
+NS=$(kubectl get dployinstance "$INST" -n dploy-system -o jsonpath='{.status.namespace}')
 SVC=$(kubectl get svc -n "$NS" -o jsonpath='{.items[0].metadata.name}')
 kubectl -n "$NS" port-forward "svc/$SVC" 9898:9898
 # open http://localhost:9898
@@ -207,7 +215,8 @@ kubectl -n "$NS" port-forward "svc/$SVC" 9898:9898
 ## 8. Clean up
 
 ```bash
-# Delete the environment via the API (operator finalizer tears down the workload)
+# Delete the environment via the API. This deletes the claim; the claim owns the
+# instance, so the cluster cascades and the operator's finalizer tears down the workload.
 curl -s -X DELETE -H "Authorization: Bearer $TOKEN" http://localhost:8080/run/podinfo
 
 # Stop the port-forwards, then remove everything
@@ -218,6 +227,6 @@ kind delete cluster --name dploy
 ## Next steps
 
 - [Installation](/installation/) — production install with real images and OIDC
-- [Templates & Instances](/concepts/templates/) — git charts, pools, parameters, and the
+- [Templates, Claims & Instances](/concepts/templates/) — git charts, pools, parameters, and the
   [`ownerClaim`](/concepts/templates/#ownership) (e.g. `groups`) for team-shared environments
 - [OIDC Providers](/deployment/oidc-providers/) — Authentik, Keycloak, and Dex in production

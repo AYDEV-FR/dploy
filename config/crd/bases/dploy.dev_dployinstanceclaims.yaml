@@ -1,0 +1,257 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: dployinstanceclaims.dploy.dev
+spec:
+  group: dploy.dev
+  names:
+    kind: DployInstanceClaim
+    listKind: DployInstanceClaimList
+    plural: dployinstanceclaims
+    shortNames:
+    - dclaim
+    singular: dployinstanceclaim
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.templateRef
+      name: Template
+      type: string
+    - jsonPath: .spec.owner
+      name: Owner
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.instanceRef
+      name: Instance
+      type: string
+    - jsonPath: .status.connectionURL
+      name: URL
+      type: string
+    - jsonPath: .status.expiresAt
+      name: Expires
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          DployInstanceClaim is a request for one environment of a DployTemplate. It
+          owns the DployInstance it binds, so deleting the claim tears the environment down.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              DployInstanceClaimSpec is a request for one environment of a template.
+
+              A claim is the only object a caller (the dploy API server, or a human with
+              kubectl) needs to create: the operator binds it to a warm pool member or
+              provisions one on demand, anchors the TTL, enforces the per-owner quota and
+              projects the instance status back onto the claim.
+            properties:
+              owner:
+                description: |-
+                  Owner is the sanitized identity key that owns the environment — a username
+                  for personal environments, or a group for team-shared ones, per the
+                  template's ownerClaim. It is the quota and listing key.
+                minLength: 1
+                type: string
+              params:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Params is the request context handed to the template: declared request
+                  parameters merged with the JWT claim values the caller chose to forward.
+                  The API server filters the token down to this map, so a raw bearer token
+                  never reaches etcd. The operator exposes it to value templates as both
+                  `.Params` and `.Claims`.
+                type: object
+              templateRef:
+                description: TemplateRef is the name of the DployTemplate (in the
+                  same namespace) to claim from.
+                minLength: 1
+                type: string
+              ttlSeconds:
+                description: |-
+                  TTLSeconds is the requested lifetime, counted from the moment the claim is
+                  bound (not from creation). 0 falls back to the template/cluster default and
+                  -1 requests an unlimited lifetime. Extending an environment is a patch that
+                  raises this value; the operator clamps it to the template's maximum and
+                  reports the effective figure in status.
+                format: int64
+                type: integer
+              waitForPool:
+                description: |-
+                  WaitForPool controls what happens when a pool template has no warm instance
+                  left: true keeps the claim Pending until one frees up, false falls back to
+                  provisioning a fresh instance on demand.
+                type: boolean
+            required:
+            - owner
+            - templateRef
+            type: object
+          status:
+            description: |-
+              DployInstanceClaimStatus is the observed state of a claim. It carries a full
+              projection of the bound instance so callers only ever watch one object.
+            properties:
+              boundAt:
+                description: BoundAt is when the instance was bound. It anchors the
+                  TTL clock.
+                format: date-time
+                type: string
+              conditions:
+                description: Conditions represent the latest observations of the claim's
+                  state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              connectionMessage:
+                description: |-
+                  ConnectionMessage is the rendered connection instructions when
+                  connectionType is "instructions".
+                type: string
+              connectionType:
+                description: |-
+                  ConnectionType describes how connectionURL/connectionMessage should be
+                  presented (web | instructions).
+                enum:
+                - web
+                - instructions
+                type: string
+              connectionURL:
+                description: ConnectionURL is the resolved connection target of the
+                  bound instance.
+                type: string
+              expiresAt:
+                description: |-
+                  ExpiresAt is boundAt + the effective TTL. Empty for an unlimited lifetime
+                  or a claim that is not bound yet.
+                format: date-time
+                type: string
+              health:
+                description: Health mirrors the bound instance's engine-reported health.
+                type: string
+              instancePhase:
+                description: InstancePhase mirrors the bound instance's phase.
+                enum:
+                - Pending
+                - Provisioning
+                - Ready
+                - Available
+                - Claimed
+                - Expiring
+                - Failed
+                type: string
+              instanceRef:
+                description: InstanceRef is the name of the bound DployInstance in
+                  the same namespace.
+                type: string
+              maxTTLSeconds:
+                description: |-
+                  MaxTTLSeconds is the ceiling spec.ttlSeconds may be raised to, derived from
+                  the template's ttl.maxExtends and ttl.extendSeconds. -1 means no ceiling.
+                format: int64
+                type: integer
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is a high-level lifecycle summary.
+                enum:
+                - Pending
+                - Bound
+                - Rejected
+                - Expired
+                type: string
+              ttlSeconds:
+                description: |-
+                  TTLSeconds is the effective lifetime granted, after clamping the requested
+                  value to the template maximum. -1 means unlimited.
+                format: int64
+                type: integer
+              uuid:
+                description: UUID is the bound instance's short identifier.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

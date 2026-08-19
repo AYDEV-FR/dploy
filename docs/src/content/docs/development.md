@@ -72,13 +72,13 @@ dploy/
 ├── cmd/
 │   ├── api/                 # API server entrypoint
 │   └── operator/            # operator (manager) entrypoint
-├── api/v1alpha1/            # CRD types: DployTemplate, DployInstance, OperatorConfig
+├── api/v1alpha1/            # CRD types: DployTemplate, DployInstanceClaim, DployInstance, OperatorConfig
 ├── internal/
 │   ├── auth/                # JWT/OIDC validation + middleware
 │   ├── config/              # API env-var config
 │   ├── handlers/            # HTTP handlers (run, environments, health)
-│   ├── kube/                # API's CR client (no Flux)
-│   ├── controller/          # reconcilers + Flux builders
+│   ├── kube/                # API's CR client (claims + catalog; no Flux)
+│   ├── controller/          # reconcilers (+ envtest suite) + Flux builders
 │   ├── operatorconfig/      # OperatorConfig resolver
 │   ├── templating/          # Go text/template + sprig renderer
 │   ├── logger/
@@ -95,7 +95,7 @@ dploy/
 
 ### Operator (`cmd/operator`, `internal/controller`)
 
-- `dployinstance_controller.go` — renders templates, ensures the Flux source + `HelmRelease`,
+- `dployinstance_controller.go` — renders templates, ensures the template's shared Flux source + the instance's `HelmRelease`,
   projects status, enforces TTL, finalizer teardown.
 - `dploytemplate_controller.go` — warm-pool maintenance + occupancy status.
 - `operatorconfig_controller.go` — observes the cluster-scoped config singleton.

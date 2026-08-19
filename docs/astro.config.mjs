@@ -33,13 +33,14 @@ export default defineConfig({
           label: 'Concepts',
           items: [
             { label: 'Architecture', link: '/concepts/architecture/' },
-            { label: 'Templates & Instances', link: '/concepts/templates/' },
+            { label: 'Templates, Claims & Instances', link: '/concepts/templates/' },
           ],
         },
         {
           label: 'Guides',
           items: [
             { label: 'Web UI', link: '/guides/web-ui/' },
+            { label: 'CTFd Integration', link: '/guides/ctfd/' },
           ],
         },
         {
