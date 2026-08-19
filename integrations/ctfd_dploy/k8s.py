@@ -34,6 +34,14 @@ LABEL_TEMPLATE = "dploy.dev/template"
 LABEL_CREATED_BY = "dploy.dev/created-by"
 CREATED_BY = "ctfd-dploy-plugin"
 
+# Every call is bounded. The python client defaults to no timeout at all, so an
+# API server that stops answering — rather than refusing — parks the request
+# forever. That matters more than it looks: CTFd holds the request's database
+# connection until the app context tears down, and the pool is 25 wide, so a
+# couple of dozen parked plugin requests stop the whole site, scoreboard and
+# flag submissions included.
+_TIMEOUT = float(os.environ.get("DPLOY_K8S_TIMEOUT", "5"))
+
 
 class K8sError(Exception):
     """Any failure talking to the Kubernetes API."""
@@ -73,7 +81,7 @@ class K8sClient:
         """All DployTemplate CRs in the namespace."""
         try:
             resp = self.api.list_namespaced_custom_object(
-                GROUP, VERSION, namespace, TEMPLATES
+                GROUP, VERSION, namespace, TEMPLATES, _request_timeout=_TIMEOUT
             )
         except client.ApiException as e:
             raise K8sError(f"list dploytemplates: {e.reason}") from e
@@ -83,7 +91,7 @@ class K8sClient:
         """A DployTemplate by name, or None."""
         try:
             return self.api.get_namespaced_custom_object(
-                GROUP, VERSION, namespace, TEMPLATES, name
+                GROUP, VERSION, namespace, TEMPLATES, name, _request_timeout=_TIMEOUT
             )
         except client.ApiException as e:
             if e.status == 404:
@@ -99,7 +107,7 @@ class K8sClient:
             kwargs["label_selector"] = label_selector
         try:
             resp = self.api.list_namespaced_custom_object(
-                GROUP, VERSION, namespace, CLAIMS, **kwargs
+                GROUP, VERSION, namespace, CLAIMS, _request_timeout=_TIMEOUT, **kwargs
             )
         except client.ApiException as e:
             raise K8sError(f"list dployinstanceclaims: {e.reason}") from e
@@ -109,7 +117,7 @@ class K8sClient:
         """A DployInstanceClaim by name, or None."""
         try:
             return self.api.get_namespaced_custom_object(
-                GROUP, VERSION, namespace, CLAIMS, name
+                GROUP, VERSION, namespace, CLAIMS, name, _request_timeout=_TIMEOUT
             )
         except client.ApiException as e:
             if e.status == 404:
@@ -121,7 +129,7 @@ class K8sClient:
         what makes a repeated Deploy click idempotent."""
         try:
             return self.api.create_namespaced_custom_object(
-                GROUP, VERSION, namespace, CLAIMS, body
+                GROUP, VERSION, namespace, CLAIMS, body, _request_timeout=_TIMEOUT
             )
         except client.ApiException as e:
             if e.status == 409:
@@ -136,7 +144,7 @@ class K8sClient:
         body = {"spec": {"ttlSeconds": int(ttl_seconds)}}
         try:
             return self.api.patch_namespaced_custom_object(
-                GROUP, VERSION, namespace, CLAIMS, name, body
+                GROUP, VERSION, namespace, CLAIMS, name, body, _request_timeout=_TIMEOUT
             )
         except client.ApiException as e:
             if e.status == 404:
@@ -150,11 +158,10 @@ class K8sClient:
         the instance, so the garbage collector cascades, and the instance's own
         finalizer unwinds the HelmRelease and the workload namespace.
 
-        `timeout` bounds the call: callers that delete outside a request (the
-        solve release thread) must not be pinned for minutes by an API server
-        that stopped answering.
+        `timeout` overrides the module default for callers that want a longer
+        or shorter bound — the solve release thread asks for ten seconds.
         """
-        kwargs = {"_request_timeout": timeout} if timeout else {}
+        kwargs = {"_request_timeout": timeout or _TIMEOUT}
         try:
             self.api.delete_namespaced_custom_object(
                 GROUP, VERSION, namespace, CLAIMS, name, **kwargs
