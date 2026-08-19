@@ -339,8 +339,11 @@
         lastHTML = null;
         hideConnectionInfo();
         if (s.error) {
+          // render() takes the state and returns markup — passing the panel to
+          // it left the error unrendered and stopped the poll, so a
+          // misconfigured challenge showed the player an empty box.
           var panel = ensurePanel();
-          if (panel) render(panel, s);
+          if (panel) panel.innerHTML = render(s);
           return;
         }
         poll(id);
