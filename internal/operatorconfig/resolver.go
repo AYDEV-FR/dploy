@@ -24,7 +24,12 @@ const (
 	defaultFluxInterval  = 5 * time.Minute
 	defaultTTLSeconds    = int64(86400)
 	defaultExtendSeconds = int64(7200)
-	defaultMaxPerUser    = 5
+	// A missing maxExtends used to mean "no ceiling", so an environment could be
+	// extended forever by clicking. Failing closed is the safer default for the
+	// thing standing between a CTF and unbounded cluster spend; -1 remains the
+	// explicit opt-in to unlimited.
+	defaultMaxExtends = 3
+	defaultMaxPerUser = 5
 )
 
 // Effective is the merged, ready-to-use operator configuration.
@@ -53,6 +58,7 @@ func Resolve(ctx context.Context, c client.Client) (Effective, error) {
 		FluxInterval:        defaultFluxInterval,
 		TTLSeconds:          defaultTTLSeconds,
 		ExtendSeconds:       defaultExtendSeconds,
+		MaxExtends:          defaultMaxExtends,
 		MaxInstancesPerUser: defaultMaxPerUser,
 		Values:              map[string]any{},
 	}

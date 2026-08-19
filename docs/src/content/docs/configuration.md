@@ -93,7 +93,7 @@ spec:
   defaults:
     ttlSeconds: 86400                   # initial TTL (24 h)
     extendSeconds: 7200                 # TTL bonus per /extend call (2 h)
-    maxExtends: 0                       # 0 = unlimited extensions
+    maxExtends: 3                       # -1 = unlimited; unset falls back to 3
     maxInstancesPerUser: 5              # per-owner quota
 
   # Free-form map exposed to value templates as `.Config.Values`. Anything you
@@ -117,7 +117,7 @@ spec:
 | `connectionMessageTemplate` | Cluster default instructions template (when `instructions`) | — |
 | `defaults.ttlSeconds` | Default TTL for a new instance | `86400` |
 | `defaults.extendSeconds` | Seconds added per `/extend` call | `7200` |
-| `defaults.maxExtends` | Maximum extensions allowed (`0` = unlimited) | `0` |
+| `defaults.maxExtends` | Maximum extensions allowed (`-1` = unlimited) | `3` |
 | `defaults.maxInstancesPerUser` | Per-owner quota (sanitized owner key) | `5` |
 | `values` | Free-form map exposed as `.Config.Values` | `{}` |
 
