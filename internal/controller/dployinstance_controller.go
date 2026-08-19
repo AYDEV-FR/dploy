@@ -174,10 +174,23 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// Materialize: workload namespace → Flux source → HelmRelease.
 	if err := r.ensureNamespace(ctx, targetNS, &inst); err != nil {
+		if isCreateRace(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return r.fail(ctx, original, &inst, "NamespaceError", err.Error())
 	}
 	srcKind, srcName, err := r.ensureSource(ctx, &tmpl, eff)
 	if err != nil {
+		// Losing a race for a shared object is not a broken environment. The
+		// source is one object per template now, so filling a pool has every
+		// instance reconcile reaching for the same one at once and all but the
+		// first getting AlreadyExists. Reporting that as a failure put a
+		// perfectly healthy environment in Failed for a full requeue — the
+		// player read "Provisioning failed" for thirty seconds while nothing
+		// was wrong.
+		if isCreateRace(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return r.fail(ctx, original, &inst, "SourceError", err.Error())
 	}
 	if err := r.ensureHelmRelease(ctx, &inst, &tmpl, eff, srcKind, srcName, targetNS, valuesJSON); err != nil {
@@ -262,6 +275,16 @@ func (r *DployInstanceReconciler) reconcileDelete(ctx context.Context, inst *dpl
 		return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
 	}
 	return ctrl.Result{}, nil
+}
+
+// isCreateRace reports whether an error is another reconcile having got there
+// first. Both forms are expected on objects shared between instances — a
+// template's Flux source, and a workload namespace whose creation the cache has
+// not caught up with — and both mean "retry", never "this environment failed".
+//
+// apierrors unwraps, so this survives the %w wrapping the ensure helpers add.
+func isCreateRace(err error) bool {
+	return apierrors.IsAlreadyExists(err) || apierrors.IsConflict(err)
 }
 
 // ensureMeta adds the finalizer and management labels, returning true if the
