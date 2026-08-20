@@ -20,6 +20,14 @@ config:
     # Dev convenience: don't prompt for consent on every login.
     skipApprovalScreen: true
 
+    # Enables the OAuth2 resource-owner password grant against the password DB
+    # below. Without this key Dex does not even advertise `password` in
+    # grant_types_supported and answers `unsupported_grant_type` — which is what
+    # `make get-token` relies on to hand you a token without driving a browser.
+    # It stays a dev-only switch: the grant hands the client the user's password,
+    # so a real deployment should use the authorization-code flow the UI uses.
+    passwordConnector: local
+
   # Static users below authenticate against this built-in password DB.
   enablePasswordDB: true
 
