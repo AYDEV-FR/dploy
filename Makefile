@@ -12,6 +12,11 @@ ENVTEST_K8S_VERSION ?= 1.34.x
 SETUP_ENVTEST ?= go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.24
 ENVTEST_DIR := $(CURDIR)/bin/envtest
 
+# Base URL the test targets talk to. The dev cluster serves the API through the
+# ingress, so no port-forward is needed; override for a port-forwarded API:
+#   make test-api API=http://localhost:8080
+API ?= http://dploy.localhost
+
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
@@ -118,21 +123,21 @@ get-token: ## Print an id_token from the dev Dex (EMAIL=user@dploy.localhost for
 # Testing
 test-health: ## Test health endpoints
 	@echo "Testing health endpoint..."
-	@curl -s http://localhost:8080/health | jq .
+	@curl -s $(API)/health | jq .
 	@echo ""
 	@echo "Testing ready endpoint..."
-	@curl -s http://localhost:8080/ready | jq .
+	@curl -s $(API)/ready | jq .
 
 test-api: ## Test API with token (requires TOKEN env var)
 	@if [ -z "$$TOKEN" ]; then echo "❌ TOKEN not set. Run: make get-token"; exit 1; fi
 	@echo "Testing /api/environments/available..."
-	@curl -s http://localhost:8080/api/environments/available | jq .
+	@curl -s $(API)/api/environments/available | jq .
 	@echo ""
 	@echo "Testing /api/environments (auth)..."
-	@curl -s -H "Authorization: Bearer $$TOKEN" http://localhost:8080/api/environments | jq .
+	@curl -s -H "Authorization: Bearer $$TOKEN" $(API)/api/environments | jq .
 	@echo ""
 	@echo "Creating environment (auth)..."
-	@curl -s -H "Authorization: Bearer $$TOKEN" http://localhost:8080/run/podinfo | jq .
+	@curl -s -H "Authorization: Bearer $$TOKEN" $(API)/api/run/podinfo | jq .
 
 # Cleanup
 clean: ## Clean build artifacts

@@ -22,7 +22,7 @@ Dploy turns a Helm chart into a self-service, time-boxed environment: a user pic
 2. The API writes a `DployInstanceClaim` — a request naming the template and the owner. That is the only thing it writes; it never touches Flux, and it never decides which environment you get.
 3. The operator binds the claim: it hands over a warm pool member, or provisions a `DployInstance` on demand. The claim owns the instance, so deleting the claim tears the environment down.
 4. The operator reconciles the instance into a Flux source + `HelmRelease`, deployed into a dedicated namespace `<owner>-<template>-<uuid>`.
-5. The environment is exposed at `<owner>-<uuid>.<baseDomain>` (or a custom `connectionURLTemplate`), and the instance's status is projected back onto the claim so a caller watches one object.
+5. The environment is exposed at `<name>-<uuid>.<baseDomain>` (or a custom `connectionURLTemplate`), and the instance's status is projected back onto the claim so a caller watches one object.
 6. When the TTL elapses, the operator's finalizer removes the `HelmRelease` and the workload namespace.
 
 See the [Architecture](https://docs.dploy.dev/concepts/architecture/) docs for the full design.
@@ -105,10 +105,10 @@ See [Templates, Claims & Instances](https://docs.dploy.dev/concepts/templates/) 
 | GET | `/ready` | — | Readiness probe (checks cluster connectivity) |
 | GET | `/api/environments/available` | — | List visible, enabled templates |
 | GET | `/api/environments` | ✓ | List the caller's environments |
-| GET | `/run/:env` | ✓ | Create/claim, or return the caller's environment |
-| GET | `/run/:env/status` | ✓ | Status of the caller's environment |
-| POST | `/run/:env/extend` | ✓ | Extend the TTL |
-| DELETE | `/run/:env` | ✓ | Delete the caller's environment |
+| GET | `/api/run/:env` | ✓ | Create/claim, or return the caller's environment |
+| GET | `/api/run/:env/status` | ✓ | Status of the caller's environment |
+| POST | `/api/run/:env/extend` | ✓ | Extend the TTL |
+| DELETE | `/api/run/:env` | ✓ | Delete the caller's environment |
 | GET | `/auth/login` | — | Start the OIDC authorization-code flow |
 | GET | `/auth/callback` | — | OIDC provider callback |
 | GET | `/auth/logout` | — | Clear client-side auth state |
