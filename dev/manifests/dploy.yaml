@@ -16,6 +16,12 @@ spec:
   flux:
     namespace: flux-system
     interval: 1m
+  # The operator's fallback URL is `https://<name>-<uid>.<baseDomain>`, but the dev
+  # ingress terminates no TLS — the advertised link would be unreachable on a
+  # cluster that only serves :80. Overriding the scheme here (and only the scheme:
+  # `.Host` is the same precomputed hostname the fallback uses) keeps what the API
+  # hands out identical to what the ingress answers on.
+  connectionURLTemplate: "http://{{ .Host }}"
   defaults:
     ttlSeconds: 3600
     extendSeconds: 1800
@@ -50,7 +56,7 @@ spec:
       enabled: true
       className: nginx
       hosts:
-        - host: {{ .UUID }}.{{ .BaseDomain }}
+        - host: {{ .Host }}
           paths:
             - path: /
               pathType: ImplementationSpecific
@@ -90,7 +96,7 @@ spec:
     ingress:
       enabled: true
       hosts:
-        - host: {{ .UUID }}.{{ .BaseDomain }}
+        - host: {{ .Host }}
           paths:
             - path: /
               pathType: ImplementationSpecific
