@@ -71,7 +71,7 @@ spec:
                 type: object
               baseDomain:
                 description: BaseDomain is used to build per-instance ingress hostnames
-                  (<uuid>.<baseDomain>).
+                  (<name>-<uid>.<baseDomain>).
                 type: string
               connectionMessageTemplate:
                 description: |-
@@ -84,7 +84,7 @@ spec:
                   ConnectionURLTemplate is the cluster-wide default Go (text/template) for an
                   instance's public URL. A DployTemplate may override it. Rendered with .Owner,
                   .UUID, .BaseDomain, .Template, .Params and .Claims. When empty the operator
-                  falls back to "<uuid>.<baseDomain>".
+                  falls back to "<name>-<uid>.<baseDomain>".
                 type: string
               defaultConnectionType:
                 allOf:

@@ -81,14 +81,14 @@ type OperatorConfigSpec struct {
 	// +optional
 	Flux FluxConfig `json:"flux,omitempty"`
 
-	// BaseDomain is used to build per-instance ingress hostnames (<uuid>.<baseDomain>).
+	// BaseDomain is used to build per-instance ingress hostnames (<name>-<uid>.<baseDomain>).
 	// +optional
 	BaseDomain string `json:"baseDomain,omitempty"`
 
 	// ConnectionURLTemplate is the cluster-wide default Go (text/template) for an
 	// instance's public URL. A DployTemplate may override it. Rendered with .Owner,
 	// .UUID, .BaseDomain, .Template, .Params and .Claims. When empty the operator
-	// falls back to "<uuid>.<baseDomain>".
+	// falls back to "<name>-<uid>.<baseDomain>".
 	// +optional
 	ConnectionURLTemplate string `json:"connectionURLTemplate,omitempty"`
 
