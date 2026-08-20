@@ -14,6 +14,7 @@ Dploy turns a Helm chart into a self-service, time-boxed environment: a user pic
 - **Templated values & URLs** — render Helm values and connection URLs with Go templates + [sprig](https://masterminds.github.io/sprig/), using the owner, UUID and request params.
 - **TTL, extensions & quotas** — the operator anchors each lifetime at the moment an environment is handed over, caps extensions at the template's budget, and enforces per-owner limits; expired environments clean themselves up via a finalizer.
 - **Embedded web UI** — a minimalist interface served directly by the API image.
+- **CTFd integration** — a plugin that files claims straight from a CTFd challenge, with no token brokered between the two systems.
 
 ## How it works
 
@@ -107,6 +108,31 @@ See [Templates, Claims & Instances](https://docs.dploy.dev/concepts/templates/) 
 
 Full reference: [API Endpoints](https://docs.dploy.dev/api/endpoints/).
 
+## CTFd integration
+
+A [CTFd](https://ctfd.io/) plugin lives in [`integrations/ctfd_dploy`](integrations/ctfd_dploy/). It puts a **Run Instance** button on any challenge that names a template, and gives admins a live view of every claim and template.
+
+The plugin writes a `DployInstanceClaim` to the cluster **directly** — that is the entire integration. There is no call to the Dploy API, no OIDC round trip and no shared secret between the two systems: CTFd's own session is the identity, and the claim CRD is the request interface.
+
+```
+CTFd session ──► plugin ──► DployInstanceClaim ──► operator ──► Flux ──► workload
+                             (create/patch/delete)   (bind, quota, TTL)
+                    ▲                │
+                    └── status ──────┘
+```
+
+A challenge is wired by putting JSON in its **Connection Information** field — that field is already the per-challenge answer to "how do I reach this", and for a deployed challenge the answer is "Dploy hands you an environment" rather than a fixed host and port:
+
+```json
+{ "template": "kali", "ttlSeconds": 1800, "waitForPool": false }
+```
+
+The keys are named after `DployInstanceClaimSpec` because that is what they are — the claim, minus the identity. A challenge whose Connection Information is anything else (the usual `nc host 1337`, or empty) is not a Dploy challenge and is left completely alone.
+
+The competitor owns the environment: the **team** in teams mode, the **user** in users mode. One team therefore shares one environment and one quota, and solving the challenge releases it.
+
+Install it as an OCI plugin image plus a RoleBinding onto CTFd's service account — the [plugin README](integrations/ctfd_dploy/README.md) has the build, RBAC and configuration details, and the [CTFd Integration guide](https://docs.dploy.dev/guides/ctfd/) covers the full setup.
+
 ## Development
 
 ```bash
@@ -130,6 +156,7 @@ Full documentation: **https://docs.dploy.dev**
 - [Architecture](https://docs.dploy.dev/concepts/architecture/) — operator/API split, RBAC boundary, lifecycle
 - [Templates, Claims & Instances](https://docs.dploy.dev/concepts/templates/) — define your catalog
 - [API Reference](https://docs.dploy.dev/api/overview/) — REST API
+- [CTFd Integration](https://docs.dploy.dev/guides/ctfd/) — run challenge environments from CTFd
 - Deployment: [OIDC Providers](https://docs.dploy.dev/deployment/oidc-providers/) · [TLS Certificates](https://docs.dploy.dev/deployment/tls-certificates/) · [ExternalDNS](https://docs.dploy.dev/deployment/external-dns/) · [Security Considerations](https://docs.dploy.dev/deployment/security-considerations/)
 
 ## License
