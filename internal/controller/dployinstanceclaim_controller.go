@@ -100,7 +100,7 @@ func (r *DployInstanceClaimReconciler) Reconcile(ctx context.Context, req ctrl.R
 		if err := r.Update(ctx, &claim); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: continueRequeue}, nil
 	}
 
 	original := claim.DeepCopy()

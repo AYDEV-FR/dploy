@@ -32,6 +32,16 @@ const (
 	failureRequeue      = 30 * time.Second
 	deletionRequeue     = 5 * time.Second
 
+	// continueRequeue re-enters a reconcile that is not finished: we have just
+	// written the object we were reading, or lost a create race to a concurrent
+	// reconcile, and the rest of the pass has to run against the new state.
+	// controller-runtime deprecated `Result{Requeue: true}` — and with it the
+	// rate-limited backoff behind it — in favor of an explicit delay, so this
+	// stands in: short enough to stay invisible in provisioning latency, long
+	// enough that a contended object is not re-read in a tight loop. Shared with
+	// the claim controller, which requeues the same way.
+	continueRequeue = 100 * time.Millisecond
+
 	// instanceMaxConcurrentReconciles matches the claim controller's default.
 	// A claim that binds instantly still waits on the instance being materialized
 	// before it reports a URL, so a single instance worker would put the whole
@@ -82,7 +92,7 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if err := r.Update(ctx, &inst); err != nil {
 			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: continueRequeue}, nil
 	}
 
 	original := inst.DeepCopy()
@@ -109,7 +119,7 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if err := r.patchStatus(ctx, original, &inst); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: continueRequeue}, nil
 	}
 
 	// Pin the workload namespace for the instance's lifetime. Recomputing it from
@@ -175,7 +185,7 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Materialize: workload namespace → Flux source → HelmRelease.
 	if err := r.ensureNamespace(ctx, targetNS, &inst); err != nil {
 		if isCreateRace(err) {
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{RequeueAfter: continueRequeue}, nil
 		}
 		return r.fail(ctx, original, &inst, "NamespaceError", err.Error())
 	}
@@ -189,7 +199,7 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		// player read "Provisioning failed" for thirty seconds while nothing
 		// was wrong.
 		if isCreateRace(err) {
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{RequeueAfter: continueRequeue}, nil
 		}
 		return r.fail(ctx, original, &inst, "SourceError", err.Error())
 	}
