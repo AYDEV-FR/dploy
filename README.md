@@ -33,10 +33,17 @@ See the [Architecture](https://docs.dploy.dev/concepts/architecture/) docs for t
 git clone https://github.com/AYDEV-FR/dploy.git
 cd dploy
 
-make setup   # Kind cluster + Flux + Dploy (operator + API)
+make setup   # Kind cluster + NGINX + Flux + Dex + Dploy (operator + API)
 ```
 
-Then follow the [Quick Start guide](https://docs.dploy.dev/quick-start/) to fetch a token and launch your first environment. `make port-forward` exposes the API at `http://localhost:8080`.
+That leaves a cluster with a catalog already loaded, reachable at `http://dploy.localhost` and signing you in against a local [Dex](https://dexidp.io/) (`admin@dploy.localhost` / `password`). For a token on the command line:
+
+```bash
+export TOKEN=$(make -s get-token)
+make test-api
+```
+
+The [Quick Start guide](https://docs.dploy.dev/quick-start/) walks the same path by hand if you would rather see each step.
 
 ## Installation (Helm)
 

@@ -67,12 +67,13 @@ docker-build-operator: ## Build operator container image
 	@echo "Building operator with $(CONTAINER_RUNTIME)..."
 	$(CONTAINER_RUNTIME) build -f Dockerfile.operator -t dploy-operator:local .
 
-docker-load: docker-build ## Build and load image into Kind
-	@echo "Loading image into Kind with $(CONTAINER_RUNTIME)..."
+docker-load: docker-build docker-build-operator ## Build and load both images into Kind
+	@echo "Loading images into Kind with $(CONTAINER_RUNTIME)..."
 	@if [ "$(CONTAINER_RUNTIME)" = "podman" ]; then \
 		export KIND_EXPERIMENTAL_PROVIDER=podman; \
 	fi && \
-	kind load docker-image dploy-api:local --name dploy-test
+	kind load docker-image dploy-api:local --name dploy-test && \
+	kind load docker-image dploy-operator:local --name dploy-test
 
 # Kind cluster
 setup: ## Complete setup from scratch (Kind cluster + Dploy)
@@ -82,10 +83,6 @@ cluster-delete: ## Delete Kind cluster
 	kind delete cluster --name dploy-test
 
 cluster-recreate: cluster-delete setup ## Delete and recreate cluster
-
-# DNS Setup
-setup-dns: ## Setup local DNS (*.dploy.dev → 127.0.0.1)
-	./dev/setup-dns.sh
 
 # Deploy
 deploy: docker-load ## Build, load and deploy via Helm (fast iteration)
@@ -103,29 +100,23 @@ logs: ## Show API logs
 	kubectl logs -n dploy-system -l app.kubernetes.io/name=dploy -f
 
 port-forward: ## Port-forward to API (use with http://localhost:8080)
-	@echo "⚠️  With DNS setup, use http://dploy.dev instead"
+	@echo "⚠️  With the dev cluster up, use http://dploy.localhost instead"
 	kubectl port-forward -n dploy-system svc/dploy 8080:80
 
-port-forward-authentik: ## Port-forward to Authentik (use with http://localhost:9000)
-	@echo "⚠️  With DNS setup, use http://auth.dploy.localhost instead"
-	kubectl port-forward -n authentik svc/authentik-server 9000:80
+port-forward-dex: ## Port-forward to Dex (use with http://localhost:5556)
+	@echo "⚠️  The dev issuer is http://auth.dploy.localhost/dex — a port-forward bypasses it,"
+	@echo "   so tokens fetched this way carry a different 'iss' and the API will reject them."
+	kubectl port-forward -n dex svc/dex 5556:5556
 
-port-forward-argocd: ## Port-forward to ArgoCD UI
-	@echo "ArgoCD admin password:"
-	@kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
-	@echo ""
-	@echo "Opening port-forward on https://localhost:8081"
-	kubectl port-forward svc/argocd-server -n argocd 8081:443
-
-get-token: ## Get JWT token from Authentik (interactive browser login)
-	@echo "To get a token, visit: http://dploy.localhost"
-	@echo "Click 'Login' and authenticate with:"
-	@echo "  User: akadmin"
-	@echo "  Pass: password"
-	@echo ""
-	@echo "The token will be stored in your browser."
-	@echo "To use it with curl, open browser DevTools > Application > Local Storage"
-	@echo "and copy the 'token' value."
+get-token: ## Print an id_token from the dev Dex (EMAIL=user@dploy.localhost for the non-admin)
+	@EMAIL=$${EMAIL:-admin@dploy.localhost}; \
+	TOKEN=$$(curl -s http://auth.dploy.localhost/dex/token \
+	  -d grant_type=password \
+	  -d client_id=dploy -d client_secret=dploy-secret \
+	  -d username="$$EMAIL" -d password=password \
+	  -d scope="openid profile email" | jq -r '.id_token // empty'); \
+	if [ -z "$$TOKEN" ]; then echo "❌ no token — is the cluster up? (make setup)"; exit 1; fi; \
+	echo "$$TOKEN"
 
 # Testing
 test-health: ## Test health endpoints
@@ -144,7 +135,7 @@ test-api: ## Test API with token (requires TOKEN env var)
 	@curl -s -H "Authorization: Bearer $$TOKEN" http://localhost:8080/api/environments | jq .
 	@echo ""
 	@echo "Creating environment (auth)..."
-	@curl -s -H "Authorization: Bearer $$TOKEN" http://localhost:8080/run/webterm | jq .
+	@curl -s -H "Authorization: Bearer $$TOKEN" http://localhost:8080/run/podinfo | jq .
 
 # Cleanup
 clean: ## Clean build artifacts

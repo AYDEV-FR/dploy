@@ -1,236 +1,58 @@
-# Development values for Dploy Helm chart
+# Chart values for the local Kind cluster (dev/setup.sh).
+#
+# Only what differs from the chart defaults is set here: locally built images,
+# and an auth block pointed at the dev Dex. The catalog, TTLs and quota the
+# operator actually enforces live in dev/manifests/dploy.yaml — the values
+# below are the API's own configuration and what the UI displays.
 
 replicaCount: 1
 
 image:
   repository: dploy-api
-  pullPolicy: Never  # Use local image loaded into Kind
   tag: "local"
+  pullPolicy: Never # built by dev/setup.sh and loaded into Kind
 
-# ArgoCD configuration
-argocd:
-  namespace: argocd
-  project: dploy
+operator:
+  enabled: true
+  image:
+    repository: dploy-operator
+    tag: "local"
+    pullPolicy: Never
 
-# Dploy API configuration
 config:
-  maxEnvironmentsPerUser: 5
-  defaultTTL: 86400      # 24 hours
-  extendTTL: 7200        # 2 hours
-  baseDomain: env.dploy.localhost
-  serverHost: "0.0.0.0"
-  serverPort: 8080
+  # Empty means the release namespace (dploy-system), which is where
+  # dev/manifests/dploy.yaml puts the templates.
+  namespace: ""
+  # Displayed in the UI; the enforced values are OperatorConfig.defaults.
+  maxEnvironmentsPerUser: 3
+  defaultTTL: 3600
+  extendTTL: 1800
+  catalogEnabled: true
+  instancesListEnabled: true
+  managerEnabled: true
 
-# OIDC/JWT configuration (generic - works with any OIDC provider)
 auth:
-  jwksURL: "http://authentik-server.authentik.svc.cluster.local/application/o/dploy/jwks/"
-  # JWT issuer must match what the OIDC provider puts in the token (internal URL for token exchange)
-  jwtIssuer: "http://authentik-server.authentik.svc.cluster.local/application/o/dploy/"
+  # Single issuer: Dex is configured with its public ingress URL, and CoreDNS
+  # resolves that host to the ingress controller in-cluster too (dev/setup.sh),
+  # so the API and the browser trust the exact same `iss`. oidcPublicIssuer is
+  # therefore left empty — there is no split horizon to bridge.
+  jwksURL: "http://auth.dploy.localhost/dex/keys"
+  jwtIssuer: "http://auth.dploy.localhost/dex"
   jwtAudience: dploy
-  jwtUsernameClaim: sub  # Use "sub" claim for username (standard OIDC)
+  # Dex's static password DB puts the `username` field in the `name` claim; it
+  # does not issue preferred_username, which is the chart default.
+  jwtUsernameClaim: name
+
+  # Dex static passwords cannot carry a `groups` claim, so admin is matched on
+  # the email instead — see the static users in dev/dex-values.yaml.
+  adminClaim: email
+  adminValue: "admin@dploy.localhost"
+
   oidcClientID: dploy
   oidcClientSecret: dploy-secret
-  # OIDC issuer URLs - discovery will fetch endpoints automatically
-  oidcIssuer: "http://authentik-server.authentik.svc.cluster.local/application/o/dploy"
-  oidcPublicIssuer: "http://auth.dploy.localhost/application/o/dploy"
+  oidcIssuer: "http://auth.dploy.localhost/dex"
+  oidcPublicIssuer: ""
   oidcRedirectURL: "http://dploy.localhost/auth/callback"
-
-# Development environments
-environments:
-  - name: debian-terminal
-    description: "Terminal web pour étudiants"
-    chart: "github.com/AYDEV-FR/dploy-charts/webshell@main"
-    enabled: true
-    icon: "terminal"
-    ttl: 1200
-    category: "linux"
-    extraValues: |
-      container:
-        image:
-          repository: debian
-          tag: bookworm
-      networkPolicy:
-        enabled: false
-      ingress:
-        enabled: true
-        hosts:
-          - host: ${ingressHost}
-            paths:
-              - path: /
-                pathType: ImplementationSpecific
-
-  - name: ubuntu-terminal
-    description: "Terminal web pour étudiants"
-    chart: "github.com/AYDEV-FR/dploy-charts/webshell@main"
-    enabled: true
-    icon: "terminal"
-    ttl: 1200
-    category: "linux"
-    extraValues: |
-      container:
-        image:
-          repository: ubuntu
-          tag: latest
-      networkPolicy:
-        enabled: false
-      ingress:
-        enabled: true
-        hosts:
-          - host: ${ingressHost}
-            paths:
-              - path: /
-                pathType: ImplementationSpecific
-
-  - name: webterm-toolbox
-    description: "Terminal web pour étudiants"
-    chart: "github.com/AYDEV-FR/dploy-charts/webshell@main"
-    enabled: true
-    icon: "terminal"
-    ttl: 1200
-    category: "linux"
-    extraValues: |
-      container:
-        image:
-          repository: aydev/toolbox
-          tag: latest
-      networkPolicy:
-        enabled: false
-      ingress:
-        enabled: true
-        hosts:
-          - host: ${ingressHost}
-            paths:
-              - path: /
-                pathType: ImplementationSpecific
-
-  - name: learning-linux
-    description: "Test learning learning"
-    chart: "github.com/AYDEV-FR/learning-ui/chart@main"
-    enabled: true
-    icon: "terminal"
-    ttl: 1200
-    category: "linux,beginner"
-    extraValues: |
-      editor:
-        enabled: true
-
-  - name: learning-git
-    description: "Test learning learning"
-    chart: "github.com/AYDEV-FR/learning-ui/chart@main"
-    enabled: true
-    icon: "terminal"
-    ttl: 1200
-    category: "linux,git"
-    valueFiles:
-      - "git.values.yaml"
-    extraValues: |
-      editor:
-        enabled: true
-
-  - name: learning-openssl
-    description: "Test learning learning"
-    chart: "github.com/AYDEV-FR/learning-ui/chart@main"
-    enabled: true
-    icon: "terminal"
-    ttl: 1200
-    category: "linux,crypto"
-    valueFiles:
-      - "openssl.values.yaml"
-    extraValues: |
-      editor:
-        enabled: true
-
-  - name: learning-kubernetes
-    description: "Test learning learning"
-    chart: "github.com/AYDEV-FR/learning-ui/chart@main"
-    enabled: true
-    icon: "terminal"
-    ttl: 1200
-    category: "linux,kubernetes"
-    valueFiles:
-      - "kubernetes01.values.yaml"
-    extraValues: |
-      editor:
-        enabled: true
-
-  - name: kali-desktop
-    description: "Kali Desktop"
-    chart: "github.com/AYDEV-FR/dploy-charts/kasm@main"
-    enabled: true
-    visible: false
-    icon: "box"
-    ttl: 1200
-    extraValues: |
-      image:
-        repository: kasmweb/core-kali-rolling
-        tag: 1.18.0
-      networkPolicy:
-        enabled: false
-      ingress:
-        enabled: true
-        hosts:
-          - host: ${ingressHost}
-            paths:
-              - path: /
-                pathType: ImplementationSpecific
-
-  - name: ubuntu-desktop
-    description: "Ubuntu Desktop"
-    chart: "github.com/AYDEV-FR/dploy-charts/kasm@main"
-    enabled: true
-    icon: "box"
-    ttl: 1200
-    category: "desktop"
-    extraValues: |
-      image:
-        repository: kasmweb/ubuntu-noble-desktop
-        tag: 1.18.0
-      networkPolicy:
-        enabled: false
-      ingress:
-        enabled: true
-        hosts:
-          - host: ${ingressHost}
-            paths:
-              - path: /
-                pathType: ImplementationSpecific
-
-  - name: chromium
-    description: "Remote Virtual Browser"
-    chart: "github.com/AYDEV-FR/dploy-charts/kasm@main"
-    enabled: true
-    icon: "web"
-    ttl: 1200
-    extraValues: |
-      image:
-        repository: kasmweb/chromium
-        tag: 1.18.0
-      networkPolicy:
-        enabled: false
-      ingress:
-        enabled: true
-        hosts:
-          - host: ${ingressHost}
-            paths:
-              - path: /
-                pathType: ImplementationSpecific
-
-  - name: vscode
-    description: "VSCode"
-    chart: "github.com/AYDEV-FR/dploy-charts/vscode@main"
-    enabled: true
-    icon: "book"
-    ttl: 1200
-    extraValues: |
-      networkPolicy:
-        enabled: false
-      ingress:
-        enabled: true
-        hosts:
-          - host: ${ingressHost}
-            paths:
-              - path: /
-                pathType: ImplementationSpecific
 
 ingress:
   enabled: true

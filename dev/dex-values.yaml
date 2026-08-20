@@ -1,0 +1,50 @@
+# Dex values for the dexidp/dex Helm chart (https://charts.dexidp.io).
+#
+# Dex replaces Authentik as the dev OIDC provider: a single binary with an
+# in-memory store and static users — no PostgreSQL/Redis, no blueprints.
+#
+# Single-issuer setup: `issuer` is the public ingress URL, and a CoreDNS
+# rewrite (added by dev/setup.sh) makes auth.dploy.localhost resolve to the
+# ingress controller in-cluster too, so the API reaches Dex at the SAME URL the
+# browser uses. That keeps the token `iss` consistent everywhere and lets the
+# split-horizon code path in internal/auth/oidc.go stay a no-op.
+config:
+  issuer: http://auth.dploy.localhost/dex
+
+  # In-memory store: state is rebuilt from this config on each restart. Fine for
+  # dev (no users to persist); avoids the kubernetes-CRD storage backend.
+  storage:
+    type: memory
+
+  oauth2:
+    # Dev convenience: don't prompt for consent on every login.
+    skipApprovalScreen: true
+
+  # Static users below authenticate against this built-in password DB.
+  enablePasswordDB: true
+
+  staticClients:
+    - id: dploy
+      name: Dploy
+      secret: dploy-secret
+      redirectURIs:
+        - http://dploy.localhost/auth/callback
+        - http://localhost:8080/auth/callback
+
+  # Both hashes are bcrypt of "password", regenerated with
+  #   htpasswd -bnBC 10 "" password
+  # The previous value was 59 characters instead of 60 — a bcrypt hash lost a
+  # character somewhere in a copy, so every login failed with "Invalid username
+  # or password" while the config looked perfectly correct.
+  # Admin is matched by the API via the email claim — see dev/values.yaml
+  # (adminClaim: email / adminValue: admin@dploy.localhost). Dex static
+  # passwords can't carry a `groups` claim, so email is the admin signal.
+  staticPasswords:
+    - email: admin@dploy.localhost
+      hash: "$2a$10$6mVrDo48oAoO7N0X7h2y5.fJHsrInKcEKlvni/ICT6aqN.cXlp7Xy"
+      username: admin
+      userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"
+    - email: user@dploy.localhost
+      hash: "$2a$10$6mVrDo48oAoO7N0X7h2y5.fJHsrInKcEKlvni/ICT6aqN.cXlp7Xy"
+      username: user
+      userID: "41331323-6f44-45e6-b3b9-2c4b60c02be5"

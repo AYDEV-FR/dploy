@@ -1,0 +1,96 @@
+# Dev cluster defaults and catalog.
+#
+# Both are custom resources now: the catalog used to be a list under
+# `environments:` in the chart values, and the TTL/quota defaults used to be API
+# config. The API reads neither — it files claims, and the operator resolves
+# everything below.
+---
+apiVersion: dploy.dev/v1alpha1
+kind: OperatorConfig
+metadata:
+  # The operator honors exactly one name; anything else is ignored.
+  name: default
+spec:
+  defaultEngine: flux
+  baseDomain: env.dploy.localhost
+  flux:
+    namespace: flux-system
+    interval: 1m
+  defaults:
+    ttlSeconds: 3600
+    extendSeconds: 1800
+    maxExtends: 3
+    maxInstancesPerUser: 3
+---
+# On-demand, no parameters: the smallest thing that proves the whole chain
+# (claim → instance → HelmRelease → workload → URL) works.
+apiVersion: dploy.dev/v1alpha1
+kind: DployTemplate
+metadata:
+  name: podinfo
+  namespace: dploy-system
+spec:
+  displayName: "Podinfo"
+  description: "Tiny demo web app — the quickest end-to-end check"
+  icon: "box"
+  category: "demo"
+  enabled: true
+  method: on-demand
+  chart:
+    type: helm
+    repoURL: https://stefanprodan.github.io/podinfo
+    chart: podinfo
+    targetRevision: "6.7.1"
+  ttl:
+    seconds: 3600
+  valuesTemplate: |
+    ui:
+      message: "Hello {{ .Owner }} — instance {{ .UUID }}"
+    ingress:
+      enabled: true
+      className: nginx
+      hosts:
+        - host: {{ .UUID }}.{{ .BaseDomain }}
+          paths:
+            - path: /
+              pathType: ImplementationSpecific
+---
+# Warm pool. Pool instances are provisioned before anyone asks, so they are
+# anonymous by construction: the CRD rejects a valuesTemplate that reads .Owner
+# or .Params, which is why the host is keyed on .UUID alone.
+apiVersion: dploy.dev/v1alpha1
+kind: DployTemplate
+metadata:
+  name: webshell
+  namespace: dploy-system
+spec:
+  displayName: "Web terminal"
+  description: "Debian shell in the browser, served from a warm pool"
+  icon: "terminal"
+  category: "linux"
+  enabled: true
+  method: pool
+  pool:
+    size: 1
+    maxSize: 4
+  chart:
+    type: git
+    repoURL: https://github.com/AYDEV-FR/dploy-charts
+    path: webshell
+    targetRevision: main
+  ttl:
+    seconds: 1200
+  valuesTemplate: |
+    container:
+      image:
+        repository: debian
+        tag: bookworm
+    networkPolicy:
+      enabled: false
+    ingress:
+      enabled: true
+      hosts:
+        - host: {{ .UUID }}.{{ .BaseDomain }}
+          paths:
+            - path: /
+              pathType: ImplementationSpecific
