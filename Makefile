@@ -92,9 +92,6 @@ deploy: docker-load ## Build, load and deploy via Helm (fast iteration)
 		--wait \
 		--timeout 2m
 
-deploy-manifests: docker-load ## Deploy using raw k8s manifests (legacy)
-	kubectl apply -f k8s/
-
 # Helpers
 logs: ## Show API logs
 	kubectl logs -n dploy-system -l app.kubernetes.io/name=dploy -f

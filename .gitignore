@@ -1,6 +1,8 @@
-# Binaries
-dploy-api
-dploy-operator
+# Binaries — anchored to the repo root on purpose: an unanchored "dploy" would
+# also match the charts/dploy/ directory.
+/dploy
+/dploy-api
+/dploy-operator
 *.exe
 *.exe~
 *.dll
@@ -33,6 +35,9 @@ Thumbs.db
 
 # Vendor
 /vendor/
+
+# Tooling caches
+.ruff_cache/
 
 # Frontend
 web/node_modules/
