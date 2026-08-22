@@ -96,10 +96,6 @@ type DployInstanceStatus struct {
 	// +optional
 	Health string `json:"health,omitempty"`
 
-	// Sync mirrors the engine-reported sync state (e.g. Synced, OutOfSync).
-	// +optional
-	Sync string `json:"sync,omitempty"`
-
 	// ExtendCount is the number of times the TTL has been extended.
 	// +optional
 	ExtendCount int `json:"extendCount,omitempty"`

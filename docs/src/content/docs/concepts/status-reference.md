@@ -48,8 +48,9 @@ the on-demand instances. The name says pool; the number does not.
 | `health` | instance controller | `Healthy`, `Progressing`, `Degraded` — a free-form string, not an enum |
 | `expiresAt` | instance controller | TTL deadline, absent while an unclaimed pool member waits |
 | `conditions` | instance controller | a single `Ready` condition |
-| `sync` | **nobody** | declared in the API, never written |
 | `extendCount` | **nobody** | declared in the API, never written |
+
+`status.sync` used to sit in this table for the same reason and has been removed from the API.
 
 | Phase | Reached when |
 |-------|--------------|
@@ -87,16 +88,23 @@ authoritative pair; `health` is a summary for display.
 
 | Phase | Reached when | Terminal? |
 |-------|--------------|-----------|
-| `Pending` | accepted, holding nothing — usually waiting on a warm member | no |
+| `Pending` | accepted, holding nothing — waiting on a warm member (`PoolExhausted`) or on the template to free a slot (`TemplateAtCapacity`) | no |
 | `Bound` | an instance is bound and owned | no |
-| `Rejected` | unsatisfiable as written, or the bound environment failed | until the spec changes |
+| `Rejected` | unsatisfiable as written, or the bound environment stayed `Failed` | until the spec changes |
 | `Expired` | the TTL ran out and the environment was torn down | yes, fully |
 
 | Condition | Status | Reasons |
 |-----------|--------|---------|
 | `Bound` | `True` | `Bound` |
-| | `False` | `PoolExhausted` (waiting), `QuotaExceeded`, `TemplateAtCapacity`, `TemplateNotFound`, `TemplateDisabled`, `InstanceFailed`, `Expired` |
+| | `False` | waiting: `PoolExhausted`, `TemplateAtCapacity` · refused: `QuotaExceeded`, `TemplateNotFound`, `TemplateDisabled`, `InstanceFailed`, `Expired` |
 | `Ready` | mirrors the bound instance's `Ready` | `Provisioning` until the instance reports otherwise; `Expired` at the end |
+
+:::note[At capacity a claim waits; over quota it is refused]
+The difference is what the owner can act on. A quota is theirs to free by releasing something, so
+`QuotaExceeded` is a refusal. `maxSize` is a property of the template that no single claimant
+controls, so `TemplateAtCapacity` parks the claim as `Pending` and it binds by itself once a slot
+opens. Rejecting there would leave the claim dead after the template emptied.
+:::
 
 :::note[A failed environment releases its claim]
 When the bound instance reaches `Failed`, the claim is `Rejected` with reason `InstanceFailed` and

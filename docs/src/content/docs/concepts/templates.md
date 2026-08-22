@@ -159,9 +159,13 @@ as `Pending` until one frees up, `false` provisions a dedicated instance on dema
 
 `maxSize` caps **every** instance of the template, idle and claimed, and it binds both paths that
 create one: the pool refill and the on-demand fallback above. A claim that would have to provision
-past the cap is `Rejected` with `TemplateAtCapacity` rather than served — which is the whole point
-of a cap, and it matters most exactly when demand outruns the warm set. Taking a warm member is
-never gated: it hands out an environment that already counts.
+past the cap waits as `Pending` with `TemplateAtCapacity` and binds on its own once a slot opens —
+it is not refused, because nothing about the claim is wrong and the condition is one the claimant
+cannot act on. Taking a warm member is never gated: it hands out an environment that already counts.
+
+Note the interaction: with `maxSize` equal to `size`, every slot is a pool slot, so
+`waitForPool: false` has nowhere to fall back to and behaves like `true`. Leave headroom above
+`size` if you want on-demand instances alongside a warm pool.
 
 Concurrent claims each pass the check before any of their instances exist, so the cap is settled
 after the fact as well as before, on the same rule the per-owner quota uses: the oldest instances
@@ -258,9 +262,9 @@ status:
 
 | Phase | Meaning |
 |-------|---------|
-| `Pending` | Accepted, not holding an environment yet — typically waiting for a warm instance |
+| `Pending` | Accepted, not holding an environment yet — waiting for a warm instance, or for the template to drop below `maxSize` |
 | `Bound` | An instance is bound and owned by the claim; `status` mirrors it |
-| `Rejected` | Unsatisfiable as written (quota exceeded, template at `maxSize`, unknown or disabled template). Terminal until the spec changes |
+| `Rejected` | Unsatisfiable as written (quota exceeded, unknown or disabled template, the bound environment failed). Terminal until the spec changes |
 | `Expired` | The environment outlived its TTL and was torn down. The claim survives as a tombstone and no longer counts against the quota |
 
 The `Bound` condition carries the reason and a human-readable message — why a claim is waiting, or

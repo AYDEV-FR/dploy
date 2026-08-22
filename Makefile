@@ -44,6 +44,10 @@ build-operator: ## Build the operator binary
 manifests: ## Generate CRD manifests and RBAC from kubebuilder markers
 	$(CONTROLLER_GEN) crd paths=./api/... output:crd:dir=config/crd/bases
 	$(CONTROLLER_GEN) rbac:roleName=dploy-operator paths=./internal/controller/... output:rbac:dir=config/rbac
+	@# The chart ships its own copy and that is what gets deployed; a CRD that
+	@# lands in config/ but not here is live only in the repo.
+	cp config/crd/bases/*.yaml charts/dploy/crds/
+	@echo "CRDs synced into charts/dploy/crds/"
 
 generate: ## Generate deepcopy (zz_generated.deepcopy.go) from kubebuilder markers
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths=./api/...
