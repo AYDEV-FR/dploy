@@ -132,7 +132,8 @@ func (r *DployTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Filling a pool whose chart is known not to resolve only manufactures
 	// environments that can never come up. An unknown verdict is not a refusal:
 	// the members wait, and no HelmRelease is applied until the probe says yes.
-	if isPoolActive(&tmpl) && !(srcKnown && !srcReady) {
+	srcBroken := srcKnown && !srcReady
+	if isPoolActive(&tmpl) && !srcBroken {
 		ttl := resolveInstanceTTL(&tmpl, eff)
 		maxSize := tmpl.Spec.Pool.MaxSize
 		for unclaimedSlots+created < tmpl.Spec.Pool.Size {
