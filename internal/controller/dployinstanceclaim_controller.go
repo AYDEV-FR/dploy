@@ -170,9 +170,15 @@ func (r *DployInstanceClaimReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 		boundAt := metav1.NewTime(time.Now().Truncate(time.Second))
 		inst, err = r.bind(ctx, &claim, &tmpl, boundAt, ttl, expiryFrom(boundAt, ttl))
+		// Parked, not refused. Rejected means "unsatisfiable as written" and stays
+		// that way until the spec changes — but this claim is fine, the template
+		// is simply full right now. Unlike a quota, which the owner can act on by
+		// releasing something, capacity is a condition they only wait out. A
+		// rejection here would stay dead after the template emptied.
 		if errors.Is(err, errTemplateAtCapacity) {
-			return r.reject(ctx, original, &claim, "TemplateAtCapacity",
-				fmt.Sprintf("template %q is at its maximum of %d environment(s)", tmpl.Name, maxTemplateSize(&tmpl)))
+			return r.pending(ctx, original, &claim, "TemplateAtCapacity",
+				fmt.Sprintf("template %q is at its maximum of %d environment(s); waiting for one to be released",
+					tmpl.Name, maxTemplateSize(&tmpl)))
 		}
 		if err != nil {
 			return ctrl.Result{}, err
@@ -241,9 +247,12 @@ func (r *DployInstanceClaimReconciler) Reconcile(ctx context.Context, req ctrl.R
 		if over, limit, cerr := r.evictIfOverMaxSize(ctx, &tmpl, inst); cerr != nil {
 			return ctrl.Result{}, cerr
 		} else if over {
+			// evictIfOverMaxSize already gave the environment back, so this claim
+			// holds nothing and waits its turn like any other.
 			claim.Status.BoundAt = nil
-			return r.reject(ctx, original, &claim, "TemplateAtCapacity",
-				fmt.Sprintf("template %q is at its maximum of %d environment(s)", tmpl.Name, limit))
+			return r.pending(ctx, original, &claim, "TemplateAtCapacity",
+				fmt.Sprintf("template %q is at its maximum of %d environment(s); waiting for one to be released",
+					tmpl.Name, limit))
 		}
 	}
 

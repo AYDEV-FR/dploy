@@ -213,10 +213,6 @@ spec:
                 - Expiring
                 - Failed
                 type: string
-              sync:
-                description: Sync mirrors the engine-reported sync state (e.g. Synced,
-                  OutOfSync).
-                type: string
               url:
                 description: |-
                   URL is the resolved connection target: the public ingress URL for "web"
