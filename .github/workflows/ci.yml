@@ -80,7 +80,7 @@ jobs:
     # has no Flux. Two production defects have already shipped through a fully
     # green CI for exactly that reason: nothing else here drives a real
     # HelmRelease, so nothing else can see them.
-    timeout-minutes: 30
+    timeout-minutes: 50
     steps:
       - name: Checkout code
         uses: actions/checkout@v6

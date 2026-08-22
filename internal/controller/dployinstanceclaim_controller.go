@@ -45,6 +45,12 @@ const (
 	// to each other; past it, a running environment is never taken away.
 	quotaSettleWindow = 60 * time.Second
 
+	// instanceFailureGrace is how long an instance must stay Failed before the
+	// claim holding it gives up. Long enough to sit through a Flux install
+	// remediation cycle on a slow cluster, short enough that a player is not
+	// left staring at a dead environment.
+	instanceFailureGrace = 3 * time.Minute
+
 	// quotaSettleRequeue paces the re-ranking inside that window.
 	quotaSettleRequeue = 3 * time.Second
 
@@ -207,10 +213,17 @@ func (r *DployInstanceClaimReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// counting against its owner's quota until the TTL ran out. Rejecting is the
 	// existing machinery for "this claim cannot be honored" — it releases the
 	// instance, which frees the quota, and the owner re-requests when ready.
-	if inst != nil && inst.Status.Phase == dployv1alpha1.PhaseFailed {
+	//
+	// Failed is not the same as beaten. Flux fails an install, then retries it
+	// under install.remediation.retries, and the instance sits in Failed in
+	// between — briefly on a fast cluster, for tens of seconds on a slow one.
+	// Rejecting on the first sighting destroys an environment that was about to
+	// come up, so wait for the failure to persist before believing it.
+	if inst != nil && failedFor(inst) > instanceFailureGrace {
 		claim.Status.BoundAt = nil
 		return r.reject(ctx, original, &claim, "InstanceFailed",
-			fmt.Sprintf("DployInstance %q failed; the environment was released", inst.Name))
+			fmt.Sprintf("DployInstance %q has been Failed for over %s; the environment was released",
+				inst.Name, instanceFailureGrace))
 	}
 
 	settling := time.Since(claim.Status.BoundAt.Time) < quotaSettleWindow
@@ -841,6 +854,20 @@ func (r *DployInstanceClaimReconciler) evictIfOverMaxSize(
 		return false, limit, fmt.Errorf("release over-capacity instance: %w", derr)
 	}
 	return true, limit, nil
+}
+
+// failedFor reports how long an instance has been continuously Failed, read
+// from the Ready condition's transition rather than from a counter nobody
+// would remember to reset. A healthy or missing instance returns zero.
+func failedFor(inst *dployv1alpha1.DployInstance) time.Duration {
+	if inst == nil || inst.Status.Phase != dployv1alpha1.PhaseFailed {
+		return 0
+	}
+	cond := apimeta.FindStatusCondition(inst.Status.Conditions, dployv1alpha1.ConditionReady)
+	if cond == nil || cond.LastTransitionTime.IsZero() {
+		return 0
+	}
+	return time.Since(cond.LastTransitionTime.Time)
 }
 
 // --- TTL ---
