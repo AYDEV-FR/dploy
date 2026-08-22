@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dployv1alpha1 "github.com/AYDEV-FR/dploy/api/v1alpha1"
@@ -30,6 +31,23 @@ const poolMaintenanceInterval = 30 * time.Second
 type DployTemplateReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// APIReader bypasses the informer cache. purgeSurplus re-reads every victim
+	// through it: a listed ResourceVersion is stale the moment anything writes
+	// the instance — a phase transition, a URL, a Flux status — so a delete
+	// precondition built on it is rejected on every attempt against a live
+	// cluster and the pool never shrinks. envtest hides this, because there the
+	// instance controller is stubbed and nothing writes the instances at all.
+	APIReader client.Reader
+}
+
+// reader returns the uncached reader, falling back to the cached client when
+// the reconciler was built without one.
+func (r *DployTemplateReconciler) reader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 // +kubebuilder:rbac:groups=dploy.dev,resources=dploytemplates,verbs=get;list;watch;create;update;patch;delete
@@ -202,22 +220,49 @@ func (r *DployTemplateReconciler) purgeSurplus(
 		if deleted == excess {
 			break
 		}
-		uid, rv := inst.UID, inst.ResourceVersion
-		delErr := r.Delete(ctx, inst, client.Preconditions{UID: &uid, ResourceVersion: &rv})
+		// Re-read uncached. The listed ResourceVersion cannot be trusted as a
+		// claim detector: it moves on any write, so on a live cluster it is
+		// almost always stale and every delete below would be refused.
+		var fresh dployv1alpha1.DployInstance
+		if err := r.reader().Get(ctx, client.ObjectKeyFromObject(inst), &fresh); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return deleted, deletedAvailable, fmt.Errorf("re-read pool instance %q: %w", inst.Name, err)
+		}
+		// The question the ResourceVersion precondition was standing in for,
+		// asked directly and against fresh state.
+		if !isPurgeable(&fresh) {
+			continue
+		}
+		uid, rv := fresh.UID, fresh.ResourceVersion
+		delErr := r.Delete(ctx, &fresh, client.Preconditions{UID: &uid, ResourceVersion: &rv})
 		switch {
 		case delErr == nil:
 			deleted++
-			if inst.Status.Phase == dployv1alpha1.PhaseAvailable {
+			if fresh.Status.Phase == dployv1alpha1.PhaseAvailable {
 				deletedAvailable++
 			}
 		case apierrors.IsConflict(delErr), apierrors.IsNotFound(delErr):
-			// Claimed or already gone between the list and here.
+			// A genuine race now, not a stale cache. Say so: a purge that skips
+			// every victim in silence is exactly how this stayed invisible.
+			logf.FromContext(ctx).V(1).Info("pool purge victim raced, skipping",
+				"instance", fresh.Name, "reason", delErr)
 			continue
 		default:
 			return deleted, deletedAvailable, fmt.Errorf("purge pool instance %q: %w", inst.Name, delErr)
 		}
 	}
 	return deleted, deletedAvailable, nil
+}
+
+// isPurgeable reports whether an unclaimed member may be destroyed. Unlike
+// isClaimable it does not require PhaseAvailable: a member still Provisioning,
+// or one that landed in Failed, is precisely the kind worth reclaiming.
+func isPurgeable(inst *dployv1alpha1.DployInstance) bool {
+	return inst.DeletionTimestamp.IsZero() &&
+		inst.Spec.Owner == "" &&
+		inst.Labels[LabelClaimUID] == ""
 }
 
 // sortPurgeVictims returns the candidates in the order they should be destroyed.
