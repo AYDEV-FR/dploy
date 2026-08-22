@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -726,4 +728,58 @@ func TestIsClaimable(t *testing.T) {
 	})) {
 		t.Error("an instance being deleted is not claimable")
 	}
+}
+
+// TestRejectedClaimReleasesItsInstance covers the leak a rejection used to open.
+//
+// A claim can already hold a running environment when it becomes unsatisfiable —
+// here its template is deleted underneath it. The instance is owner-referenced to
+// the claim, not the template, so deleting the template does not collect it; the
+// claim went Rejected and cleared status.instanceRef, and the instance was left
+// Failed with its workload namespace and pods running until someone removed it by
+// hand. Rejecting now releases what the claim holds.
+func TestRejectedClaimReleasesItsInstance(t *testing.T) {
+	requireEnvtest(t)
+	ns := newNamespace(t)
+
+	makeTemplate(t, ns, "doomed", nil)
+	makeClaim(t, ns, "holder", "doomed", "alice", nil)
+
+	var held string
+	eventually(t, "the claim to bind", func() (bool, string) {
+		claim := getClaim(t, ns, "holder")
+		if claim.Status.Phase != dployv1alpha1.ClaimBound || claim.Status.InstanceRef == "" {
+			return false, fmt.Sprintf("phase=%q instance=%q", claim.Status.Phase, claim.Status.InstanceRef)
+		}
+		held = claim.Status.InstanceRef
+		return true, ""
+	})
+
+	if err := k8sClient.Delete(context.Background(), &dployv1alpha1.DployTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "doomed", Namespace: ns},
+	}); err != nil {
+		t.Fatalf("delete template: %v", err)
+	}
+
+	eventually(t, "the claim to be rejected", func() (bool, string) {
+		claim := getClaim(t, ns, "holder")
+		return claim.Status.Phase == dployv1alpha1.ClaimRejected, fmt.Sprintf("phase=%q", claim.Status.Phase)
+	})
+
+	eventually(t, "the held instance to be released", func() (bool, string) {
+		var inst dployv1alpha1.DployInstance
+		err := k8sClient.Get(context.Background(), types.NamespacedName{Name: held, Namespace: ns}, &inst)
+		if apierrors.IsNotFound(err) {
+			return true, ""
+		}
+		if err != nil {
+			return false, err.Error()
+		}
+		// envtest has no kubelet, so a released instance is only really gone once
+		// its deletionTimestamp is set; the finalizer drains against real Flux.
+		if !inst.DeletionTimestamp.IsZero() {
+			return true, ""
+		}
+		return false, fmt.Sprintf("instance %s still live in phase %q", held, inst.Status.Phase)
+	})
 }
