@@ -10,6 +10,8 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -54,12 +56,27 @@ func (r *DployTemplateReconciler) reader() client.Reader {
 // +kubebuilder:rbac:groups=dploy.dev,resources=dploytemplates/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=dploy.dev,resources=dploytemplates/finalizers,verbs=update
 // +kubebuilder:rbac:groups=dploy.dev,resources=dployinstances,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=gitrepositories;helmrepositories;helmcharts,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile keeps the template's warm pool at the desired size and updates occupancy.
 func (r *DployTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var tmpl dployv1alpha1.DployTemplate
 	if err := r.Get(ctx, req.NamespacedName, &tmpl); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// The template owns its Flux source, and it owns the verdict on whether that
+	// source — and the chart reference inside it — actually resolves. Instances
+	// refuse to apply a HelmRelease until this says yes, so an unresolvable chart
+	// costs one failing probe instead of one failing HelmChart per instance. A
+	// handful of those is enough to starve helm-controller for the whole cluster.
+	eff, err := operatorconfig.Resolve(ctx, r.Client)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	srcReady, srcKnown, srcReason, srcMessage, err := r.syncSource(ctx, &tmpl, eff)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	var list dployv1alpha1.DployInstanceList
@@ -112,11 +129,10 @@ func (r *DployTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// pool_kind_test.go stresses it against a real API server, where the cache lag
 	// is real rather than in-process.
 	created := 0
-	if isPoolActive(&tmpl) {
-		eff, err := operatorconfig.Resolve(ctx, r.Client)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
+	// Filling a pool whose chart is known not to resolve only manufactures
+	// environments that can never come up. An unknown verdict is not a refusal:
+	// the members wait, and no HelmRelease is applied until the probe says yes.
+	if isPoolActive(&tmpl) && !(srcKnown && !srcReady) {
 		ttl := resolveInstanceTTL(&tmpl, eff)
 		maxSize := tmpl.Spec.Pool.MaxSize
 		for unclaimedSlots+created < tmpl.Spec.Pool.Size {
@@ -144,6 +160,17 @@ func (r *DployTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	original := tmpl.DeepCopy()
+	sourceStatus := metav1.ConditionFalse
+	if srcReady {
+		sourceStatus = metav1.ConditionTrue
+	}
+	apimeta.SetStatusCondition(&tmpl.Status.Conditions, metav1.Condition{
+		Type:               dployv1alpha1.ConditionSourceReady,
+		Status:             sourceStatus,
+		Reason:             srcReason,
+		Message:            srcMessage,
+		ObservedGeneration: tmpl.Generation,
+	})
 	tmpl.Status.PoolAvailable = availableReady - deletedAvailable
 	tmpl.Status.PoolClaimed = claimed
 	tmpl.Status.PoolTotal = total + created - deleted
@@ -152,7 +179,7 @@ func (r *DployTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, fmt.Errorf("patch DployTemplate status: %w", err)
 	}
 
-	if isPoolActive(&tmpl) {
+	if isPoolActive(&tmpl) || !srcReady {
 		return ctrl.Result{RequeueAfter: poolMaintenanceInterval}, nil
 	}
 	return ctrl.Result{}, nil
@@ -190,6 +217,40 @@ func (r *DployTemplateReconciler) createPoolInstance(ctx context.Context, tmpl *
 // all is different — acquirePooled only ever runs for MethodPool, so warm
 // members left behind by a method switch can never be claimed by anyone and
 // would leak until the template is deleted.
+// syncSource reconciles the template's Flux source and its single chart probe,
+// and reports whether an instance may now safely apply a HelmRelease.
+func (r *DployTemplateReconciler) syncSource(
+	ctx context.Context,
+	tmpl *dployv1alpha1.DployTemplate,
+	eff operatorconfig.Effective,
+) (ready, known bool, reason, message string, err error) {
+	if chartRef(tmpl) == "" {
+		return false, true, "ChartNotConfigured", "template has neither chart.path nor chart.chart set", nil
+	}
+	srcKind, srcName, err := ensureSource(ctx, r.Client, r.Scheme, tmpl, eff)
+	if err != nil {
+		if isCreateRace(err) {
+			return false, false, "SourcePending", "another reconcile is creating the source", nil
+		}
+		if fluxAbsent(err) {
+			return false, false, "FluxUnavailable", "the Flux source CRDs are not installed on this cluster", nil
+		}
+		return false, false, "", "", err
+	}
+	hc, herr := ensureChartProbe(ctx, r.Client, r.Scheme, tmpl, srcKind, srcName, eff)
+	if herr != nil {
+		if isCreateRace(herr) {
+			return false, false, "ChartProbePending", "another reconcile is creating the chart probe", nil
+		}
+		if fluxAbsent(herr) {
+			return false, false, "FluxUnavailable", "the Flux HelmChart CRD is not installed on this cluster", nil
+		}
+		return false, false, "", "", herr
+	}
+	ready, known, reason, message = translateChartProbe(hc)
+	return ready, known, reason, message, nil
+}
+
 func desiredWarm(tmpl *dployv1alpha1.DployTemplate) int {
 	if tmpl.Spec.Method != dployv1alpha1.MethodPool || tmpl.Spec.Pool == nil {
 		return 0

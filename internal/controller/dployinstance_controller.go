@@ -189,7 +189,7 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		return r.fail(ctx, original, &inst, "NamespaceError", err.Error())
 	}
-	srcKind, srcName, err := r.ensureSource(ctx, &tmpl, eff)
+	srcKind, srcName, err := ensureSource(ctx, r.Client, r.Scheme, &tmpl, eff)
 	if err != nil {
 		// Losing a race for a shared object is not a broken environment. The
 		// source is one object per template now, so filling a pool has every
@@ -202,6 +202,25 @@ func (r *DployInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{RequeueAfter: continueRequeue}, nil
 		}
 		return r.fail(ctx, original, &inst, "SourceError", err.Error())
+	}
+	// The template is the authority on whether the chart resolves, and it proves
+	// it once with a single probe. Applying a HelmRelease before that verdict is
+	// what turns one bad chart path into one failing HelmChart per instance —
+	// enough of them and helm-controller stops serving every other template.
+	if ready, reason, message := templateSourceReady(&tmpl); !ready {
+		inst.Status.Phase = dployv1alpha1.PhaseProvisioning
+		inst.Status.Health = "Progressing"
+		apimeta.SetStatusCondition(&inst.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			Reason:             reason,
+			Message:            message,
+			ObservedGeneration: inst.Generation,
+		})
+		if perr := r.patchStatus(ctx, original, &inst); perr != nil {
+			return ctrl.Result{}, perr
+		}
+		return ctrl.Result{RequeueAfter: provisioningRequeue}, nil
 	}
 	if err := r.ensureHelmRelease(ctx, &inst, &tmpl, eff, srcKind, srcName, targetNS, valuesJSON); err != nil {
 		return r.fail(ctx, original, &inst, "HelmReleaseError", err.Error())

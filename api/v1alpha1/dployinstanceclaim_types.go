@@ -31,6 +31,13 @@ const (
 	ConditionBound = "Bound"
 	// ConditionReady mirrors the bound instance's readiness.
 	ConditionReady = "Ready"
+
+	// ConditionSourceReady is set on a DployTemplate once its Flux source AND
+	// its chart reference have been proven to resolve. Instances refuse to apply
+	// a HelmRelease until it is True: a chart that cannot resolve would otherwise
+	// produce one failing HelmChart per instance, and enough of those starve
+	// helm-controller for every other template on the cluster.
+	ConditionSourceReady = "SourceReady"
 )
 
 // DployInstanceClaimSpec is a request for one environment of a template.

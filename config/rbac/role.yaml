@@ -73,6 +73,7 @@ rules:
   - source.toolkit.fluxcd.io
   resources:
   - gitrepositories
+  - helmcharts
   - helmrepositories
   - ocirepositories
   verbs:
