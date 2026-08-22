@@ -520,7 +520,19 @@ func (r *DployInstanceClaimReconciler) pending(ctx context.Context, original, cl
 
 // reject marks the claim unsatisfiable as written. It stays that way until the
 // spec changes.
+//
+// A claim can already hold an instance when it is rejected — its template was
+// deleted or disabled out from under a running environment, or a quota race
+// settled against it. Releasing it here is what makes `status.instanceRef = ""`
+// below true rather than merely tidy: the instance is owner-referenced to the
+// claim, so nothing else would ever collect it, and it would sit Failed with its
+// workload namespace and pods running until someone deleted it by hand. The
+// quota path already deletes before rejecting; this makes every reason behave
+// the same, and the double delete is a harmless NotFound.
 func (r *DployInstanceClaimReconciler) reject(ctx context.Context, original, claim *dployv1alpha1.DployInstanceClaim, reason, message string) (ctrl.Result, error) {
+	if err := r.releaseHeld(ctx, claim); err != nil {
+		return ctrl.Result{}, err
+	}
 	claim.Status.Phase = dployv1alpha1.ClaimRejected
 	claim.Status.InstanceRef = ""
 	claim.Status.ExpiresAt = nil
@@ -532,6 +544,20 @@ func (r *DployInstanceClaimReconciler) reject(ctx context.Context, original, cla
 		ObservedGeneration: claim.Generation,
 	})
 	return ctrl.Result{}, r.patchStatus(ctx, original, claim)
+}
+
+// releaseHeld deletes the instance a claim is holding, if any. It looks the
+// instance up by the claim-UID label rather than status.instanceRef so a claim
+// rejected before its status caught up still releases what it actually won.
+func (r *DployInstanceClaimReconciler) releaseHeld(ctx context.Context, claim *dployv1alpha1.DployInstanceClaim) error {
+	inst, err := r.boundInstance(ctx, claim)
+	if err != nil || inst == nil {
+		return err
+	}
+	if err := r.Delete(ctx, inst); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("release instance %q of rejected claim: %w", inst.Name, err)
+	}
+	return nil
 }
 
 // expire tears the environment down and leaves the claim behind as a tombstone,
