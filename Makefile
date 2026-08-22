@@ -1,4 +1,4 @@
-.PHONY: help build build-go build-operator test envtest docker-build docker-build-operator docker-load logs port-forward clean frontend-install frontend-build frontend-dev manifests generate install uninstall
+.PHONY: help build build-go build-operator test test-e2e test-e2e-scale envtest docker-build docker-build-operator docker-load logs port-forward clean frontend-install frontend-build frontend-dev manifests generate install uninstall
 
 # Detect container runtime
 CONTAINER_RUNTIME := $(shell command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && echo docker || echo podman)
@@ -18,7 +18,7 @@ ENVTEST_DIR := $(CURDIR)/bin/envtest
 API ?= http://dploy.localhost
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # Frontend
 frontend-install: ## Install frontend dependencies
@@ -119,6 +119,20 @@ get-token: ## Print an id_token from the dev Dex (EMAIL=user@dploy.localhost for
 	  -d scope="openid profile email" | jq -r '.id_token // empty'); \
 	if [ -z "$$TOKEN" ]; then echo "❌ no token — is the cluster up? (make setup)"; exit 1; fi; \
 	echo "$$TOKEN"
+
+# End-to-end tests (real cluster: Flux + operator required — see test/e2e/README.md).
+# KUBECONTEXT selects the target cluster; it is deliberately explicit so a stray
+# `kubectl config use-context` cannot silently redirect a destructive test run.
+KUBECONTEXT ?=
+E2E_POOL_SIZE ?= 5
+
+test-e2e: ## Run the e2e suite against a real cluster (KUBECONTEXT=cyber)
+	@if [ -z "$(KUBECONTEXT)" ]; then echo "❌ KUBECONTEXT not set. Example: make test-e2e KUBECONTEXT=cyber"; exit 1; fi
+	E2E_KUBECONTEXT=$(KUBECONTEXT) E2E_POOL_SIZE=$(E2E_POOL_SIZE) \
+	  go test -tags e2e -v -count=1 -timeout 45m ./test/e2e/
+
+test-e2e-scale: ## Run the e2e suite with a 30-member pool (KUBECONTEXT=cyber)
+	@$(MAKE) test-e2e KUBECONTEXT=$(KUBECONTEXT) E2E_POOL_SIZE=30
 
 # Testing
 test-health: ## Test health endpoints
