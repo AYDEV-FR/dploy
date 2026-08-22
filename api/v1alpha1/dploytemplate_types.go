@@ -7,6 +7,9 @@ import (
 // PoolSpec configures pre-warming for templates using the "pool" method.
 type PoolSpec struct {
 	// Size is the number of warm, idle instances to keep available for claiming.
+	// It is a target rather than a floor: lowering it reclaims the surplus
+	// unclaimed members, and 0 drains the pool. Claimed instances are never
+	// touched.
 	// +kubebuilder:validation:Minimum=0
 	Size int `json:"size"`
 

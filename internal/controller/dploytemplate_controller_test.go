@@ -4,10 +4,13 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	dployv1alpha1 "github.com/AYDEV-FR/dploy/api/v1alpha1"
@@ -100,4 +103,222 @@ func TestPoolRefillsExactlyOnceAfterClaims(t *testing.T) {
 		unclaimed, _ := countPooled(t, ns, "churn")
 		return unclaimed <= size, fmt.Sprintf("%d unclaimed members for a pool of %d", unclaimed, size)
 	})
+}
+
+// setPoolSize patches a template's pool size, retrying on the conflicts the
+// controller's own status writes produce.
+func setPoolSize(t *testing.T, ns, name string, size int) {
+	t.Helper()
+	eventually(t, fmt.Sprintf("pool size of %q set to %d", name, size), func() (bool, string) {
+		var tmpl dployv1alpha1.DployTemplate
+		if err := k8sClient.Get(context.Background(),
+			types.NamespacedName{Name: name, Namespace: ns}, &tmpl); err != nil {
+			return false, err.Error()
+		}
+		patch := client.MergeFrom(tmpl.DeepCopy())
+		if tmpl.Spec.Pool == nil {
+			tmpl.Spec.Pool = &dployv1alpha1.PoolSpec{}
+		}
+		tmpl.Spec.Pool.Size = size
+		if err := k8sClient.Patch(context.Background(), &tmpl, patch); err != nil {
+			return false, err.Error()
+		}
+		return true, ""
+	})
+}
+
+// TestPoolShrinkRemovesSurplus is the purge path: lowering pool.size has to
+// reclaim the members that are now surplus.
+//
+// Before the purge existed this was a silent no-op — the reconciler only ever
+// filled, and an unclaimed member never expires on its own because applyTTL
+// starts the clock at Ready or Claimed and a warm member sits in Available.
+func TestPoolShrinkRemovesSurplus(t *testing.T) {
+	requireEnvtest(t)
+	ns := newNamespace(t)
+
+	makeTemplate(t, ns, "shrink", func(tm *dployv1alpha1.DployTemplate) {
+		tm.Spec.Method = dployv1alpha1.MethodPool
+		tm.Spec.Pool = &dployv1alpha1.PoolSpec{Size: 5}
+	})
+	waitForPoolReady(t, ns, "shrink", 5)
+
+	setPoolSize(t, ns, "shrink", 2)
+
+	eventually(t, "the pool to shrink to 2", func() (bool, string) {
+		unclaimed, _ := countPooled(t, ns, "shrink")
+		return unclaimed == 2, fmt.Sprintf("%d unclaimed", unclaimed)
+	})
+
+	// And it settles there rather than oscillating between the fill and purge
+	// paths, which is the failure mode a naive implementation would have.
+	consistently(t, 3*time.Second, "pool did not settle at 2", func() (bool, string) {
+		unclaimed, _ := countPooled(t, ns, "shrink")
+		return unclaimed == 2, fmt.Sprintf("%d unclaimed", unclaimed)
+	})
+}
+
+// TestPoolShrinkSparesClaimedInstances is the safety property: shrinking must
+// only ever take from the unclaimed set. Destroying someone's live environment
+// to satisfy a size change would be the worst possible reading of "shrink".
+func TestPoolShrinkSparesClaimedInstances(t *testing.T) {
+	requireEnvtest(t)
+	ns := newNamespace(t)
+
+	makeTemplate(t, ns, "shrink-claimed", func(tm *dployv1alpha1.DployTemplate) {
+		tm.Spec.Method = dployv1alpha1.MethodPool
+		tm.Spec.Pool = &dployv1alpha1.PoolSpec{Size: 3}
+	})
+	waitForPoolReady(t, ns, "shrink-claimed", 3)
+
+	makeClaim(t, ns, "holder", "shrink-claimed", "alice", nil)
+	eventually(t, "the claim to bind", func() (bool, string) {
+		_, claimed := countPooled(t, ns, "shrink-claimed")
+		return claimed == 1, fmt.Sprintf("%d claimed", claimed)
+	})
+
+	setPoolSize(t, ns, "shrink-claimed", 0)
+
+	eventually(t, "the warm members to drain", func() (bool, string) {
+		unclaimed, _ := countPooled(t, ns, "shrink-claimed")
+		return unclaimed == 0, fmt.Sprintf("%d unclaimed", unclaimed)
+	})
+
+	// The claimed one is still standing, and stays that way.
+	consistently(t, 3*time.Second, "a claimed instance was purged", func() (bool, string) {
+		_, claimed := countPooled(t, ns, "shrink-claimed")
+		return claimed == 1, fmt.Sprintf("%d claimed", claimed)
+	})
+}
+
+// TestPoolPurgedWhenMethodLeavesPool covers the leak a method switch used to
+// open: acquirePooled only runs for MethodPool, so warm members left behind by
+// a template that is no longer pooled can never be claimed by anyone.
+func TestPoolPurgedWhenMethodLeavesPool(t *testing.T) {
+	requireEnvtest(t)
+	ns := newNamespace(t)
+
+	makeTemplate(t, ns, "switcher", func(tm *dployv1alpha1.DployTemplate) {
+		tm.Spec.Method = dployv1alpha1.MethodPool
+		tm.Spec.Pool = &dployv1alpha1.PoolSpec{Size: 3}
+	})
+	waitForPoolReady(t, ns, "switcher", 3)
+
+	eventually(t, "the method to flip to on-demand", func() (bool, string) {
+		var tmpl dployv1alpha1.DployTemplate
+		if err := k8sClient.Get(context.Background(),
+			types.NamespacedName{Name: "switcher", Namespace: ns}, &tmpl); err != nil {
+			return false, err.Error()
+		}
+		patch := client.MergeFrom(tmpl.DeepCopy())
+		tmpl.Spec.Method = dployv1alpha1.MethodOnDemand
+		if err := k8sClient.Patch(context.Background(), &tmpl, patch); err != nil {
+			return false, err.Error()
+		}
+		return true, ""
+	})
+
+	eventually(t, "the orphaned warm members to be reclaimed", func() (bool, string) {
+		unclaimed, _ := countPooled(t, ns, "switcher")
+		return unclaimed == 0, fmt.Sprintf("%d unclaimed", unclaimed)
+	})
+}
+
+// TestPoolSurvivesDisable pins the deliberate exception: a disabled template
+// keeps its warm set. Disabling is usually temporary, and draining would make
+// re-enabling pay the full provisioning cost again.
+func TestPoolSurvivesDisable(t *testing.T) {
+	requireEnvtest(t)
+	ns := newNamespace(t)
+
+	makeTemplate(t, ns, "disabled-pool", func(tm *dployv1alpha1.DployTemplate) {
+		tm.Spec.Method = dployv1alpha1.MethodPool
+		tm.Spec.Pool = &dployv1alpha1.PoolSpec{Size: 2}
+	})
+	waitForPoolReady(t, ns, "disabled-pool", 2)
+
+	eventually(t, "the template to be disabled", func() (bool, string) {
+		var tmpl dployv1alpha1.DployTemplate
+		if err := k8sClient.Get(context.Background(),
+			types.NamespacedName{Name: "disabled-pool", Namespace: ns}, &tmpl); err != nil {
+			return false, err.Error()
+		}
+		patch := client.MergeFrom(tmpl.DeepCopy())
+		tmpl.Spec.Enabled = false
+		if err := k8sClient.Patch(context.Background(), &tmpl, patch); err != nil {
+			return false, err.Error()
+		}
+		return true, ""
+	})
+
+	consistently(t, 3*time.Second, "a disabled template lost its warm pool", func() (bool, string) {
+		unclaimed, _ := countPooled(t, ns, "disabled-pool")
+		return unclaimed == 2, fmt.Sprintf("%d unclaimed", unclaimed)
+	})
+}
+
+// TestPurgeVictimOrder pins which member is destroyed first. The ranking is the
+// difference between shrinking a pool and degrading it: a Failed member is worth
+// nothing, one still provisioning has no user waiting on it, and an Available
+// member is the only kind anyone can claim right now — so Available goes last,
+// and among equals the newest goes first because the oldest has been proven
+// healthy for longest.
+func TestPurgeVictimOrder(t *testing.T) {
+	now := metav1.Now()
+	older := metav1.NewTime(now.Add(-time.Hour))
+
+	mk := func(name string, phase dployv1alpha1.InstancePhase, created metav1.Time) *dployv1alpha1.DployInstance {
+		inst := &dployv1alpha1.DployInstance{}
+		inst.Name = name
+		inst.CreationTimestamp = created
+		inst.Status.Phase = phase
+		return inst
+	}
+
+	tests := []struct {
+		name  string
+		input []*dployv1alpha1.DployInstance
+		want  []string
+	}{
+		{
+			name: "failed first, then provisioning, then available",
+			input: []*dployv1alpha1.DployInstance{
+				mk("available", dployv1alpha1.PhaseAvailable, now),
+				mk("provisioning", dployv1alpha1.PhaseProvisioning, now),
+				mk("failed", dployv1alpha1.PhaseFailed, now),
+			},
+			want: []string{"failed", "provisioning", "available"},
+		},
+		{
+			name: "newest first among equals",
+			input: []*dployv1alpha1.DployInstance{
+				mk("old", dployv1alpha1.PhaseAvailable, older),
+				mk("new", dployv1alpha1.PhaseAvailable, now),
+			},
+			want: []string{"new", "old"},
+		},
+		{
+			name: "name breaks ties so the choice is stable",
+			input: []*dployv1alpha1.DployInstance{
+				mk("b", dployv1alpha1.PhaseAvailable, now),
+				mk("a", dployv1alpha1.PhaseAvailable, now),
+			},
+			want: []string{"a", "b"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sortPurgeVictims(tc.input)
+			names := make([]string, len(got))
+			for i := range got {
+				names[i] = got[i].Name
+			}
+			for i := range tc.want {
+				if names[i] != tc.want[i] {
+					t.Fatalf("order = %v, want %v", names, tc.want)
+				}
+			}
+		})
+	}
 }
