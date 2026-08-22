@@ -143,6 +143,26 @@ func instancesFor(ctx context.Context, template string) ([]dployv1alpha1.DployIn
 	return list.Items, nil
 }
 
+// livePoolInstances is the pool as the operator itself counts it: an instance
+// carrying a deletionTimestamp has already left the pool, even though its
+// object lingers while Flux tears the environment down. That teardown takes
+// tens of seconds against a real cluster; under envtest the instance
+// controller is stubbed and the object disappears at once, which is why an
+// assertion on the raw count can pass there and fail here.
+func livePoolInstances(ctx context.Context, template string) ([]dployv1alpha1.DployInstance, error) {
+	all, err := instancesFor(ctx, template)
+	if err != nil {
+		return nil, err
+	}
+	live := make([]dployv1alpha1.DployInstance, 0, len(all))
+	for i := range all {
+		if all[i].DeletionTimestamp.IsZero() {
+			live = append(live, all[i])
+		}
+	}
+	return live, nil
+}
+
 // countPhases buckets a template's instances by phase — the shape most pool
 // assertions want, and a readable failure message when they miss.
 func countPhases(instances []dployv1alpha1.DployInstance) map[dployv1alpha1.InstancePhase]int {

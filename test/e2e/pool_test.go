@@ -149,12 +149,12 @@ func TestPoolScaling(t *testing.T) {
 		setPoolSize(ctx, t, tmpl.Name, 1)
 		waitPoolAvailable(ctx, t, "e2e-pool-scale", 1, deleteTimeout+2*time.Minute)
 
-		instances, err := instancesFor(ctx, "e2e-pool-scale")
+		instances, err := livePoolInstances(ctx, "e2e-pool-scale")
 		if err != nil {
 			t.Fatalf("list instances: %v", err)
 		}
 		if len(instances) != 1 {
-			t.Errorf("after shrinking to 1 there are %d instances (phases: %v)",
+			t.Errorf("after shrinking to 1 there are %d live instances (phases: %v)",
 				len(instances), countPhases(instances))
 		}
 
@@ -163,16 +163,30 @@ func TestPoolScaling(t *testing.T) {
 		settle := 45 * time.Second
 		deadline := time.Now().Add(settle)
 		for time.Now().Before(deadline) {
-			instances, err := instancesFor(ctx, "e2e-pool-scale")
+			instances, err := livePoolInstances(ctx, "e2e-pool-scale")
 			if err != nil {
 				t.Fatalf("list instances: %v", err)
 			}
 			if len(instances) != 1 {
-				t.Fatalf("pool did not settle at 1: %d instances (phases: %v)",
+				t.Fatalf("pool did not settle at 1: %d live instances (phases: %v)",
 					len(instances), countPhases(instances))
 			}
 			time.Sleep(5 * time.Second)
 		}
+
+		// Leaving the pool is not the same as being gone: pin that the purged
+		// members actually finish tearing down rather than lingering forever as
+		// tombstones, which filtering them out of the checks above would hide.
+		eventually(t, deleteTimeout, "the purged members to finish tearing down", func() error {
+			all, err := instancesFor(ctx, "e2e-pool-scale")
+			if err != nil {
+				return err
+			}
+			if len(all) != 1 {
+				return fmt.Errorf("%d instance objects remain (phases: %v)", len(all), countPhases(all))
+			}
+			return nil
+		})
 	})
 
 	t.Run("shrinking to zero drains the pool", func(t *testing.T) {
