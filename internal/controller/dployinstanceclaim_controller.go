@@ -202,6 +202,17 @@ func (r *DployInstanceClaimReconciler) Reconcile(ctx context.Context, req ctrl.R
 	//
 	// The window matters. Past it an environment you hold is yours, so lowering a
 	// quota never reaches back and kills something already running.
+	// A bound claim whose environment died is not served, and nothing else was
+	// watching for it: the claim kept pointing at the dead instance and kept
+	// counting against its owner's quota until the TTL ran out. Rejecting is the
+	// existing machinery for "this claim cannot be honored" — it releases the
+	// instance, which frees the quota, and the owner re-requests when ready.
+	if inst != nil && inst.Status.Phase == dployv1alpha1.PhaseFailed {
+		claim.Status.BoundAt = nil
+		return r.reject(ctx, original, &claim, "InstanceFailed",
+			fmt.Sprintf("DployInstance %q failed; the environment was released", inst.Name))
+	}
+
 	settling := time.Since(claim.Status.BoundAt.Time) < quotaSettleWindow
 	if settling {
 		if over, limit, qerr := r.evictIfOverQuota(ctx, &claim, &tmpl, eff, inst); qerr != nil {
