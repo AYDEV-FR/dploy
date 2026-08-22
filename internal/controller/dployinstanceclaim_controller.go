@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"sort"
@@ -163,6 +164,10 @@ func (r *DployInstanceClaimReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 		boundAt := metav1.NewTime(time.Now().Truncate(time.Second))
 		inst, err = r.bind(ctx, &claim, &tmpl, boundAt, ttl, expiryFrom(boundAt, ttl))
+		if errors.Is(err, errTemplateAtCapacity) {
+			return r.reject(ctx, original, &claim, "TemplateAtCapacity",
+				fmt.Sprintf("template %q is at its maximum of %d environment(s)", tmpl.Name, maxTemplateSize(&tmpl)))
+		}
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -205,6 +210,16 @@ func (r *DployInstanceClaimReconciler) Reconcile(ctx context.Context, req ctrl.R
 			claim.Status.BoundAt = nil
 			return r.reject(ctx, original, &claim, "QuotaExceeded",
 				fmt.Sprintf("owner %q already holds the maximum of %d environment(s)", claim.Spec.Owner, limit))
+		}
+		// The same race, one level up: concurrent claims each pass the maxSize
+		// pre-check before any of their creates are visible. Re-rank on the same
+		// stable rule so the overshoot is given back instead of kept.
+		if over, limit, cerr := r.evictIfOverMaxSize(ctx, &tmpl, inst); cerr != nil {
+			return ctrl.Result{}, cerr
+		} else if over {
+			claim.Status.BoundAt = nil
+			return r.reject(ctx, original, &claim, "TemplateAtCapacity",
+				fmt.Sprintf("template %q is at its maximum of %d environment(s)", tmpl.Name, limit))
 		}
 	}
 
@@ -303,6 +318,16 @@ func (r *DployInstanceClaimReconciler) bind(
 		}
 		if claim.Spec.WaitForPool {
 			return nil, nil
+		}
+		// Falling through here means provisioning a new environment, and this is
+		// the only path on which maxSize was never consulted: the template
+		// controller checks it in the fill loop, so the cap held for warm members
+		// and did nothing at all once demand outran the pool. Taking a warm member
+		// is deliberately not gated — it does not change the total.
+		if over, err := r.overMaxSize(ctx, tmpl); err != nil {
+			return nil, err
+		} else if over {
+			return nil, errTemplateAtCapacity
 		}
 	}
 	return r.createOnDemand(ctx, claim, tmpl, boundAt, ttl, expiresAt)
@@ -716,6 +741,93 @@ func (r *DployInstanceClaimReconciler) evictIfOverQuota(
 	}
 	if derr := r.Delete(ctx, inst); derr != nil && !apierrors.IsNotFound(derr) {
 		return false, limit, fmt.Errorf("release over-quota instance: %w", derr)
+	}
+	return true, limit, nil
+}
+
+// errTemplateAtCapacity signals that serving a claim would require creating an
+// instance the template's maxSize forbids. It travels as an error so bind stays
+// a two-value function.
+var errTemplateAtCapacity = errors.New("template at capacity")
+
+// maxTemplateSize is the template's instance cap, 0 meaning unlimited.
+func maxTemplateSize(tmpl *dployv1alpha1.DployTemplate) int {
+	if tmpl.Spec.Method != dployv1alpha1.MethodPool || tmpl.Spec.Pool == nil {
+		return 0
+	}
+	return tmpl.Spec.Pool.MaxSize
+}
+
+// templateInstances lists a template's live instances oldest-first, read
+// uncached: a cached count is stale exactly when it matters, which is while a
+// burst of claims is creating the instances being counted.
+func (r *DployInstanceClaimReconciler) templateInstances(ctx context.Context, namespace, template string) ([]dployv1alpha1.DployInstance, error) {
+	var list dployv1alpha1.DployInstanceList
+	if err := r.reader().List(ctx, &list,
+		client.InNamespace(namespace),
+		client.MatchingLabels{LabelTemplate: template},
+	); err != nil {
+		return nil, fmt.Errorf("list template instances: %w", err)
+	}
+	out := make([]dployv1alpha1.DployInstance, 0, len(list.Items))
+	for i := range list.Items {
+		if list.Items[i].DeletionTimestamp.IsZero() {
+			out = append(out, list.Items[i])
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreationTimestamp.Equal(&out[j].CreationTimestamp) {
+			return out[i].CreationTimestamp.Before(&out[j].CreationTimestamp)
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
+// overMaxSize is the pre-check: is the template already at its cap?
+func (r *DployInstanceClaimReconciler) overMaxSize(ctx context.Context, tmpl *dployv1alpha1.DployTemplate) (bool, error) {
+	limit := maxTemplateSize(tmpl)
+	if limit <= 0 {
+		return false, nil
+	}
+	live, err := r.templateInstances(ctx, tmpl.Namespace, tmpl.Name)
+	if err != nil {
+		return false, err
+	}
+	return len(live) >= limit, nil
+}
+
+// evictIfOverMaxSize settles a capacity race after the fact, on the same rule
+// the quota uses: the oldest `limit` instances keep their slots, so once every
+// create is visible all claims agree on who overshot. A claim that lost gives
+// its environment back rather than keeping the template above its cap.
+func (r *DployInstanceClaimReconciler) evictIfOverMaxSize(
+	ctx context.Context,
+	tmpl *dployv1alpha1.DployTemplate,
+	inst *dployv1alpha1.DployInstance,
+) (evicted bool, limit int, err error) {
+	limit = maxTemplateSize(tmpl)
+	if limit <= 0 || inst == nil {
+		return false, 0, nil
+	}
+	live, err := r.templateInstances(ctx, tmpl.Namespace, tmpl.Name)
+	if err != nil {
+		return false, limit, err
+	}
+	rank := -1
+	for i := range live {
+		if live[i].Name == inst.Name {
+			rank = i
+			break
+		}
+	}
+	// Not visible yet — the pre-check already passed, so let it stand and let
+	// the next reconcile decide against a complete list.
+	if rank < 0 || rank < limit {
+		return false, limit, nil
+	}
+	if derr := r.Delete(ctx, inst); derr != nil && !apierrors.IsNotFound(derr) {
+		return false, limit, fmt.Errorf("release over-capacity instance: %w", derr)
 	}
 	return true, limit, nil
 }

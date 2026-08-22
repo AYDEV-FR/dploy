@@ -44,6 +44,31 @@ func poolTemplate(t *testing.T, ns, name string, size int) *dployv1alpha1.DployT
 	})
 }
 
+// setPoolSizeTo retargets a live pool, retrying the conflict a concurrent
+// status write will occasionally produce.
+func setPoolSizeTo(t *testing.T, ns, name string, size int) {
+	t.Helper()
+	ctx := context.Background()
+	for range 20 {
+		var tmpl dployv1alpha1.DployTemplate
+		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &tmpl); err != nil {
+			t.Fatalf("get template %s: %v", name, err)
+		}
+		if tmpl.Spec.Pool == nil {
+			t.Fatalf("template %s has no pool", name)
+		}
+		tmpl.Spec.Pool.Size = size
+		err := k8sClient.Update(ctx, &tmpl)
+		if err == nil {
+			return
+		}
+		if !apierrors.IsConflict(err) {
+			t.Fatalf("set pool size on %s: %v", name, err)
+		}
+	}
+	t.Fatalf("set pool size on %s: still conflicting", name)
+}
+
 // TestClaimBindsWarmPoolInstance walks the whole kubectl-only cycle: apply a
 // claim against a warm pool, watch it go Bound with a connection URL projected
 // from the instance, and confirm the claim owns the instance it was handed.
@@ -284,11 +309,22 @@ func TestClaimWaitsForPool(t *testing.T) {
 func TestClaimFallsBackToOnDemand(t *testing.T) {
 	requireEnvtest(t)
 	ns := newNamespace(t)
-	tmpl := poolTemplate(t, ns, "fallback", 1)
+	// maxSize is deliberately not the pool size here. poolTemplate pins the two
+	// together so a scarcity test never sees a refill, but that cap also forbids
+	// the on-demand instance this test is about: one claimed member already sits
+	// at a cap of 1. Leave room for exactly one fallback, then close the pool so
+	// the fill loop cannot beat the second claim to it — scarcity without
+	// borrowing the cap to produce it.
+	tmpl := makeTemplate(t, ns, "fallback", func(tmpl *dployv1alpha1.DployTemplate) {
+		tmpl.Spec.Method = dployv1alpha1.MethodPool
+		tmpl.Spec.Pool = &dployv1alpha1.PoolSpec{Size: 1, MaxSize: 2}
+	})
 	waitForPoolReady(t, ns, tmpl.Name, 1)
 
 	first := makeClaim(t, ns, "first", tmpl.Name, "alice", nil)
 	waitClaimPhase(t, ns, first.Name, dployv1alpha1.ClaimBound)
+
+	setPoolSizeTo(t, ns, tmpl.Name, 0)
 
 	second := makeClaim(t, ns, "second", tmpl.Name, "bob", func(c *dployv1alpha1.DployInstanceClaim) {
 		c.Spec.WaitForPool = false

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" width="960" height="320" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-label="Chart source verification. The DployTemplate controller reconciles one Flux source and one HelmChart probe per template, and publishes the result as the template's SourceReady condition. While SourceReady is true, instances apply their HelmRelease as usual. While it is false — a chart path that does not exist, an unreachable repository — no instance applies a HelmRelease and a warm pool stops filling, so one unresolvable chart costs one failing probe instead of one failing HelmChart per instance. A verdict that is merely unknown, because Flux has not answered yet or is not installed, holds the HelmRelease back but does not stop a pool from filling.">
+  <defs>
+    <marker id="sv-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+  </defs>
+
+  <!-- Template -->
+  <rect x="24" y="112" width="150" height="44" rx="22" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+  <text x="99" y="139" text-anchor="middle" fill="#334155" font-size="13" font-weight="600">DployTemplate</text>
+
+  <!-- Source -->
+  <rect x="222" y="112" width="164" height="44" rx="22" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="304" y="133" text-anchor="middle" fill="#1e3a8a" font-size="12.5" font-weight="600">Flux source</text>
+  <text x="304" y="149" text-anchor="middle" fill="#1e40af" font-size="10">one per template</text>
+
+  <!-- Probe -->
+  <rect x="434" y="112" width="164" height="44" rx="22" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="516" y="133" text-anchor="middle" fill="#1e3a8a" font-size="12.5" font-weight="600">HelmChart probe</text>
+  <text x="516" y="149" text-anchor="middle" fill="#1e40af" font-size="10">one per template</text>
+
+  <!-- Verdict -->
+  <rect x="646" y="112" width="150" height="44" rx="22" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+  <text x="721" y="133" text-anchor="middle" fill="#334155" font-size="12.5" font-weight="600">SourceReady</text>
+  <text x="721" y="149" text-anchor="middle" fill="#475569" font-size="10">on the template</text>
+
+  <!-- Arrows along the spine -->
+  <path d="M174,134 L216,134" stroke="#334155" stroke-width="1.6" fill="none" marker-end="url(#sv-arrow)"/>
+  <path d="M386,134 L428,134" stroke="#334155" stroke-width="1.6" fill="none" marker-end="url(#sv-arrow)"/>
+  <path d="M598,134 L640,134" stroke="#334155" stroke-width="1.6" fill="none" marker-end="url(#sv-arrow)"/>
+  <text x="512" y="100" text-anchor="middle" fill="#64748b" font-size="10.5">does the chart reference resolve?</text>
+
+  <!-- True branch -->
+  <rect x="646" y="34" width="290" height="44" rx="22" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="791" y="55" text-anchor="middle" fill="#166534" font-size="12.5" font-weight="600">instances apply their HelmRelease</text>
+  <text x="791" y="70" text-anchor="middle" fill="#15803d" font-size="10">pool fills normally</text>
+  <path d="M796,124 C848,124 848,96 848,84" stroke="#16a34a" stroke-width="1.6" fill="none" marker-end="url(#sv-arrow)"/>
+  <text x="864" y="106" fill="#16a34a" font-size="10.5" font-weight="600">True</text>
+
+  <!-- False branch -->
+  <rect x="646" y="196" width="290" height="58" rx="22" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="791" y="218" text-anchor="middle" fill="#991b1b" font-size="12.5" font-weight="600">no HelmRelease is applied</text>
+  <text x="791" y="234" text-anchor="middle" fill="#b91c1c" font-size="10">a known failure also holds the pool fill</text>
+  <text x="791" y="247" text-anchor="middle" fill="#b91c1c" font-size="10">the reason is on the template, not buried per instance</text>
+  <path d="M796,144 C848,144 848,182 848,190" stroke="#dc2626" stroke-width="1.6" fill="none" marker-end="url(#sv-arrow)"/>
+  <text x="862" y="172" fill="#dc2626" font-size="10.5" font-weight="600">False</text>
+
+  <!-- Unknown -->
+  <rect x="222" y="212" width="376" height="42" rx="14" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.3"/>
+  <text x="410" y="232" text-anchor="middle" fill="#92400e" font-size="11" font-weight="600">Unknown is not False</text>
+  <text x="410" y="246" text-anchor="middle" fill="#b45309" font-size="10">Flux silent or absent: hold the HelmRelease, still fill the pool</text>
+  <path d="M516,160 L470,206" stroke="#f59e0b" stroke-width="1.4" fill="none" stroke-dasharray="4 3" marker-end="url(#sv-arrow)"/>
+
+  <text x="24" y="292" fill="#64748b" font-size="10.5">One probe per template replaces one failing HelmChart per instance — the amplification that starves helm-controller for every other template.</text>
+</svg>

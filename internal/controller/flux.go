@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -15,6 +16,8 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	dployv1alpha1 "github.com/AYDEV-FR/dploy/api/v1alpha1"
@@ -22,6 +25,20 @@ import (
 )
 
 const maxReleaseNameLen = 53
+
+// chartRef is what Flux is asked to resolve: a path in the repo for git
+// sources, a chart name for Helm ones.
+func chartRef(tmpl *dployv1alpha1.DployTemplate) string {
+	return firstNonEmpty(tmpl.Spec.Chart.Path, tmpl.Spec.Chart.Chart)
+}
+
+// chartVersion is the semver expression, meaningful only for Helm sources.
+func chartVersion(tmpl *dployv1alpha1.DployTemplate) string {
+	if tmpl.Spec.Chart.Type == dployv1alpha1.ChartSourceHelm {
+		return firstNonEmpty(tmpl.Spec.Chart.TargetRevision, "*")
+	}
+	return ""
+}
 
 // readiness is the coarse outcome of a HelmRelease's Ready condition.
 type readiness int
@@ -170,7 +187,7 @@ func templateLabels(tmpl *dployv1alpha1.DployTemplate) map[string]string {
 // Every instance computes an identical spec, so CreateOrUpdate writes on the
 // first instance and is a no-op for the rest: a burst causes no write
 // amplification on the shared object.
-func (r *DployInstanceReconciler) ensureSource(ctx context.Context, tmpl *dployv1alpha1.DployTemplate, eff operatorconfig.Effective) (kind, name string, err error) {
+func ensureSource(ctx context.Context, c client.Client, scheme *runtime.Scheme, tmpl *dployv1alpha1.DployTemplate, eff operatorconfig.Effective) (kind, name string, err error) {
 	cs := tmpl.Spec.Chart
 	name = templateSourceName(tmpl)
 	interval := metav1.Duration{Duration: eff.FluxInterval}
@@ -182,12 +199,12 @@ func (r *DployInstanceReconciler) ensureSource(ctx context.Context, tmpl *dployv
 		}
 		repo := &sourcev1.HelmRepository{}
 		repo.Name, repo.Namespace = name, tmpl.Namespace
-		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, repo, func() error {
+		_, err = controllerutil.CreateOrUpdate(ctx, c, repo, func() error {
 			repo.Labels = templateLabels(tmpl)
 			repo.Spec.URL = cs.RepoURL
 			repo.Spec.Type = repoType
 			repo.Spec.Interval = interval
-			return controllerutil.SetControllerReference(tmpl, repo, r.Scheme)
+			return controllerutil.SetControllerReference(tmpl, repo, scheme)
 		})
 		if err != nil {
 			return "", "", fmt.Errorf("ensure HelmRepository: %w", err)
@@ -198,17 +215,104 @@ func (r *DployInstanceReconciler) ensureSource(ctx context.Context, tmpl *dployv
 	// Default: git source.
 	repo := &sourcev1.GitRepository{}
 	repo.Name, repo.Namespace = name, tmpl.Namespace
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, repo, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, c, repo, func() error {
 		repo.Labels = templateLabels(tmpl)
 		repo.Spec.URL = cs.RepoURL
 		repo.Spec.Reference = &sourcev1.GitRepositoryRef{Branch: firstNonEmpty(cs.TargetRevision, "main")}
 		repo.Spec.Interval = interval
-		return controllerutil.SetControllerReference(tmpl, repo, r.Scheme)
+		return controllerutil.SetControllerReference(tmpl, repo, scheme)
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("ensure GitRepository: %w", err)
 	}
 	return sourcev1.GitRepositoryKind, name, nil
+}
+
+// fluxAbsent reports whether an error is simply "Flux is not installed here".
+// A cluster without the source CRDs cannot answer the chart question at all,
+// and that is an unknown verdict, not a broken template — envtest runs exactly
+// this way, and so does a cluster where Flux has yet to be deployed.
+func fluxAbsent(err error) bool {
+	// Both predicates type-assert and neither unwraps, while every caller here
+	// wraps with %w for context — so walk the chain rather than testing only
+	// the outermost error.
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		if apimeta.IsNoMatchError(e) || runtime.IsNotRegisteredError(e) {
+			return true
+		}
+	}
+	return false
+}
+
+// templateSourceReady reads the template's verdict on its own chart source.
+func templateSourceReady(tmpl *dployv1alpha1.DployTemplate) (ready bool, reason, message string) {
+	c := apimeta.FindStatusCondition(tmpl.Status.Conditions, dployv1alpha1.ConditionSourceReady)
+	if c == nil {
+		return false, "SourceNotVerified", "the template has not verified its chart source yet"
+	}
+	if c.Status == metav1.ConditionTrue {
+		return true, firstNonEmpty(c.Reason, "SourceReady"), c.Message
+	}
+	return false, firstNonEmpty(c.Reason, "SourceNotReady"),
+		firstNonEmpty(c.Message, "the template's chart source does not resolve")
+}
+
+// templateChartProbeName is the single HelmChart a template keeps to prove its
+// chart reference resolves.
+func templateChartProbeName(tmpl *dployv1alpha1.DployTemplate) string {
+	return truncate(templateSourceName(tmpl)+"-probe", maxReleaseNameLen)
+}
+
+// ensureChartProbe reconciles one template-scoped HelmChart. Resolving a chart
+// reference is exactly what source-controller does when a HelmRelease asks for
+// one, so probing it once per template answers the same question the instances
+// would each have asked — without creating N objects that each fail the same way.
+func ensureChartProbe(
+	ctx context.Context,
+	c client.Client,
+	scheme *runtime.Scheme,
+	tmpl *dployv1alpha1.DployTemplate,
+	srcKind, srcName string,
+	eff operatorconfig.Effective,
+) (*sourcev1.HelmChart, error) {
+	hc := &sourcev1.HelmChart{}
+	hc.Name, hc.Namespace = templateChartProbeName(tmpl), tmpl.Namespace
+	if _, err := controllerutil.CreateOrUpdate(ctx, c, hc, func() error {
+		hc.Labels = templateLabels(tmpl)
+		hc.Spec.Chart = chartRef(tmpl)
+		hc.Spec.Interval = metav1.Duration{Duration: eff.FluxInterval}
+		hc.Spec.SourceRef = sourcev1.LocalHelmChartSourceReference{Kind: srcKind, Name: srcName}
+		hc.Spec.Version = chartVersion(tmpl)
+		return controllerutil.SetControllerReference(tmpl, hc, scheme)
+	}); err != nil {
+		return nil, fmt.Errorf("ensure chart probe: %w", err)
+	}
+	return hc, nil
+}
+
+// translateChartProbe reads the probe's verdict. Anything short of Ready=True
+// blocks instances: a transient source sync unblocks on its own, and a chart
+// path that does not exist stays blocked with the reason visible on the
+// template, which is where an operator looks.
+func translateChartProbe(hc *sourcev1.HelmChart) (ready, known bool, reason, message string) {
+	if hc == nil || hc.Name == "" {
+		return false, false, "ChartProbePending", "chart probe has not been created yet"
+	}
+	cond := apimeta.FindStatusCondition(hc.Status.Conditions, fluxmeta.ReadyCondition)
+	if cond == nil {
+		// No verdict at all: source-controller has not looked yet, or is not
+		// running. Unknown is not the same as broken, and callers act on the
+		// difference — holding a HelmRelease back is cheap, refusing to fill a
+		// pool on a suspicion is not.
+		return false, false, "ChartProbePending", "source-controller has not reconciled the chart probe yet"
+	}
+	if cond.Status == metav1.ConditionTrue {
+		return true, true, firstNonEmpty(cond.Reason, "ChartResolved"), firstNonEmpty(cond.Message, "chart reference resolves")
+	}
+	if cond.Status == metav1.ConditionUnknown {
+		return false, false, firstNonEmpty(cond.Reason, "ChartProbePending"), firstNonEmpty(cond.Message, "chart resolution still in progress")
+	}
+	return false, true, firstNonEmpty(cond.Reason, "ChartNotResolved"), firstNonEmpty(cond.Message, "chart reference does not resolve")
 }
 
 // ensureHelmRelease reconciles the HelmRelease that installs the chart into the
@@ -221,13 +325,9 @@ func (r *DployInstanceReconciler) ensureHelmRelease(
 	sourceKind, sourceName, targetNS string,
 	valuesJSON []byte,
 ) error {
-	cs := tmpl.Spec.Chart
-	// For git the chart lives at a path in the repo; for helm it's the chart name.
-	chart := firstNonEmpty(cs.Path, cs.Chart)
-	version := ""
-	if cs.Type == dployv1alpha1.ChartSourceHelm {
-		version = firstNonEmpty(cs.TargetRevision, "*")
-	}
+	// Same reference the template's probe proved resolvable.
+	chart := chartRef(tmpl)
+	version := chartVersion(tmpl)
 
 	hr := &helmv2.HelmRelease{}
 	hr.Name, hr.Namespace = engineResourceName(inst), inst.Namespace

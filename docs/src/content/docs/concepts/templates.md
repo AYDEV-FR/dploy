@@ -157,6 +157,17 @@ replacement to refill the pool.
 If no warm instance is free, `spec.waitForPool` decides: `true` (the API's default) parks the claim
 as `Pending` until one frees up, `false` provisions a dedicated instance on demand instead.
 
+`maxSize` caps **every** instance of the template, idle and claimed, and it binds both paths that
+create one: the pool refill and the on-demand fallback above. A claim that would have to provision
+past the cap is `Rejected` with `TemplateAtCapacity` rather than served — which is the whole point
+of a cap, and it matters most exactly when demand outruns the warm set. Taking a warm member is
+never gated: it hands out an environment that already counts.
+
+Concurrent claims each pass the check before any of their instances exist, so the cap is settled
+after the fact as well as before, on the same rule the per-owner quota uses: the oldest instances
+keep their slots, and a claim that overshot gives its environment back. The rule is stable, so once
+every create is visible all claims agree on who lost.
+
 `size` is a target, not a floor: lowering it reclaims the members that are now surplus, and
 `size: 0` drains the warm set entirely. The purge only ever takes from **unclaimed** members — a
 claimed environment is never destroyed to satisfy a size change, and a claim that lands while the
@@ -249,7 +260,7 @@ status:
 |-------|---------|
 | `Pending` | Accepted, not holding an environment yet — typically waiting for a warm instance |
 | `Bound` | An instance is bound and owned by the claim; `status` mirrors it |
-| `Rejected` | Unsatisfiable as written (quota exceeded, unknown or disabled template). Terminal until the spec changes |
+| `Rejected` | Unsatisfiable as written (quota exceeded, template at `maxSize`, unknown or disabled template). Terminal until the spec changes |
 | `Expired` | The environment outlived its TTL and was torn down. The claim survives as a tombstone and no longer counts against the quota |
 
 The `Bound` condition carries the reason and a human-readable message — why a claim is waiting, or
@@ -326,7 +337,7 @@ status:
 | Phase | Meaning |
 |-------|---------|
 | `Pending` | Accepted, not yet reconciled |
-| `Provisioning` | Flux is installing the release |
+| `Provisioning` | Flux is installing the release — or the template has not yet proven its chart resolves, in which case no `HelmRelease` is applied at all |
 | `Ready` | On-demand instance healthy and reachable |
 | `Available` | Warm pool member, unclaimed |
 | `Claimed` | Pool member handed to a user |

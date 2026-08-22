@@ -122,6 +122,27 @@ The trade-off to know: deleting a template garbage-collects the shared source, i
 under any claimed instance still running off it. The workload keeps serving — Helm has already
 installed it — but Flux can no longer upgrade or re-render that release.
 
+**The template proves the chart resolves before any instance applies a `HelmRelease`.** Alongside
+the shared source, the DployTemplate controller keeps a single `HelmChart` probe and publishes the
+answer as the template's `SourceReady` condition. Instances read that condition and refuse to apply
+their `HelmRelease` until it is `True`.
+
+This exists because the failure it prevents is not local. A chart path that does not exist still
+clones fine — the `GitRepository` goes `Ready`, and the error only surfaces one level down, when
+source-controller tries to resolve the chart for a `HelmRelease`. Each instance asks for its own
+resolution, so a broken template produced one permanently failing `HelmChart` *per instance*, each
+retried forever. Enough of them and helm-controller stops serving every other template on the
+cluster. Probing once per template turns that amplification back into a single object, and puts
+the reason on the template where an operator is already looking.
+
+![Chart source verification: the DployTemplate controller reconciles one Flux source and one HelmChart probe per template and publishes the result as the SourceReady condition. While it is true, instances apply their HelmRelease as usual. While it is false, no instance applies one and a warm pool stops filling. A merely unknown verdict — Flux silent or not installed — holds the HelmRelease back without stopping a pool from filling.](/diagrams/dploy-source-verification.svg)
+
+Unknown is deliberately not the same as false. A cluster where Flux has not answered yet — or is
+not installed at all — cannot say whether the chart resolves, and refusing to fill a pool on that
+suspicion would be worse than the problem. So an unknown verdict holds the `HelmRelease` back, which
+costs nothing, while a *known* failure also stops the pool from manufacturing members that could
+never come up.
+
 ### OIDC provider
 
 External identity provider (Authentik, Keycloak, Dex, …) that issues JWTs and exposes a JWKS

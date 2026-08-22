@@ -30,7 +30,7 @@ rules:
     resources: [helmreleases]
     verbs: [create, delete, get, list, patch, update, watch]
   - apiGroups: [source.toolkit.fluxcd.io]
-    resources: [gitrepositories, helmrepositories, ocirepositories]
+    resources: [gitrepositories, helmrepositories, ocirepositories, helmcharts]
     verbs: [create, delete, get, list, patch, update, watch]
   {{- if .Values.operator.leaderElection }}
   - apiGroups: [coordination.k8s.io]
