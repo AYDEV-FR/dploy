@@ -157,6 +157,25 @@ replacement to refill the pool.
 If no warm instance is free, `spec.waitForPool` decides: `true` (the API's default) parks the claim
 as `Pending` until one frees up, `false` provisions a dedicated instance on demand instead.
 
+`size` is a target, not a floor: lowering it reclaims the members that are now surplus, and
+`size: 0` drains the warm set entirely. The purge only ever takes from **unclaimed** members — a
+claimed environment is never destroyed to satisfy a size change, and a claim that lands while the
+purge is running wins the race. Surplus members are picked least-useful-first (failed, then still
+provisioning, then `Available`), keeping the oldest warm instances since those have been healthy
+longest.
+
+Deleting a template takes its environments with it, claimed ones included: a claim whose template
+disappears becomes `Rejected`, and rejecting releases the instance it was holding. Without that the
+instance — owner-referenced to the claim rather than the template — would sit `Failed` with its
+workload namespace and pods still running until someone deleted it by hand.
+
+Two cases behave differently on purpose:
+
+- **A disabled template keeps its warm set.** Disabling is usually temporary, and draining would
+  make re-enabling pay the full provisioning cost again.
+- **Switching `method` away from `pool` drains it.** Warm members are only ever handed out for
+  `method: pool`, so members left behind by a method switch could never be claimed by anyone.
+
 ### Connection URLs
 
 The instance URL is resolved with this precedence:
