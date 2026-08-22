@@ -30,8 +30,13 @@ func TestTTLExpiry(t *testing.T) {
 	requireCluster(t)
 	ctx := context.Background()
 
+	// The TTL has to outlast provisioning, not race it. The clock starts at the
+	// binding, so a 30s lifetime reaps the instance before it is ever Ready on
+	// any cluster slower than a workstation — the assertion below then fails on
+	// "not found" and reads like a bug in expiry rather than a budget too tight
+	// to observe it.
 	tmpl := newTemplate("e2e-ttl")
-	tmpl.Spec.TTL = &dployv1alpha1.TTLSpec{Seconds: 30}
+	tmpl.Spec.TTL = &dployv1alpha1.TTLSpec{Seconds: 120}
 	createTemplate(ctx, t, tmpl)
 	createClaim(ctx, t, newClaim("e2e-ttl-claim", "e2e-ttl", "dave"))
 
@@ -40,10 +45,10 @@ func TestTTLExpiry(t *testing.T) {
 	workloadNS := inst.Status.Namespace
 
 	if claim.Status.ExpiresAt == nil {
-		t.Fatal("a 30s TTL produced no expiry")
+		t.Fatal("a 120s TTL produced no expiry")
 	}
 
-	eventually(t, 4*time.Minute, "the expired instance to be reaped", func() error {
+	eventually(t, 6*time.Minute, "the expired instance to be reaped", func() error {
 		var got dployv1alpha1.DployInstance
 		err := k8s.Get(ctx, types.NamespacedName{Name: inst.Name, Namespace: testNS}, &got)
 		if apierrors.IsNotFound(err) {
@@ -237,12 +242,16 @@ func TestWaitForPoolFallback(t *testing.T) {
 	requireCluster(t)
 	ctx := context.Background()
 
-	// A pool that can never produce a member: size 1 capped at 1, with that one
-	// taken by a holder claim.
-	createTemplate(ctx, t, newPoolTemplate("e2e-wait", 1, 1))
+	// The pool must be empty for both answers to be observable, and it must not
+	// refill behind the test. Capping it at the pool size did both at once, but
+	// that cap now also forbids the on-demand instance the second subtest is
+	// about: one claimed member already sits at a cap of 1. Leave room for
+	// exactly one fallback, then close the pool to keep it empty.
+	tmpl := createTemplate(ctx, t, newPoolTemplate("e2e-wait", 1, 2))
 	waitPoolAvailable(ctx, t, "e2e-wait", 1, poolBudget(1))
 	createClaim(ctx, t, newClaim("e2e-wait-holder", "e2e-wait", "holder"))
 	waitClaimBound(ctx, t, "e2e-wait-holder", 2*time.Minute)
+	setPoolSize(ctx, t, tmpl.Name, 0)
 
 	t.Run("waitForPool parks the claim as Pending", func(t *testing.T) {
 		claim := newClaim("e2e-wait-parked", "e2e-wait", "waiter")
