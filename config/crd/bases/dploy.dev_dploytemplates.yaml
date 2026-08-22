@@ -204,8 +204,11 @@ spec:
                       keeping the pool fresh and preventing state leakage between users. Defaults to true.
                     type: boolean
                   size:
-                    description: Size is the number of warm, idle instances to keep
-                      available for claiming.
+                    description: |-
+                      Size is the number of warm, idle instances to keep available for claiming.
+                      It is a target rather than a floor: lowering it reclaims the surplus
+                      unclaimed members, and 0 drains the pool. Claimed instances are never
+                      touched.
                     minimum: 0
                     type: integer
                 required:
