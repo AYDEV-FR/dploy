@@ -79,7 +79,7 @@ func TestPoolRefillAgainstKind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build manager: %v", err)
 	}
-	if err := (&DployTemplateReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr); err != nil {
+	if err := (&DployTemplateReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("register template reconciler: %v", err)
 	}
 

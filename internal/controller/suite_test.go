@@ -84,7 +84,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(fmt.Sprintf("build manager: %v", err))
 	}
-	must((&DployTemplateReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr))
+	must((&DployTemplateReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr))
 	must((&DployInstanceClaimReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
