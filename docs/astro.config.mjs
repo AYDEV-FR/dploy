@@ -34,6 +34,7 @@ export default defineConfig({
           items: [
             { label: 'Architecture', link: '/concepts/architecture/' },
             { label: 'Templates, Claims & Instances', link: '/concepts/templates/' },
+            { label: 'Status & Conditions', link: '/concepts/status-reference/' },
           ],
         },
         {
