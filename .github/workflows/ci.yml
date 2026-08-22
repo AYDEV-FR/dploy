@@ -72,6 +72,66 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+  e2e:
+    name: E2E (Kind + Flux)
+    runs-on: ubuntu-latest
+    # The suite this job runs is excluded from `go test ./...` by the e2e build
+    # tag, and the envtest suite stubs the instance controller because envtest
+    # has no Flux. Two production defects have already shipped through a fully
+    # green CI for exactly that reason: nothing else here drives a real
+    # HelmRelease, so nothing else can see them.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Create Kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: dploy-e2e
+          wait: 120s
+
+      - name: Install Flux
+        run: |
+          curl -s https://fluxcd.io/install.sh | sudo bash
+          flux install --components=source-controller,helm-controller
+          kubectl -n flux-system rollout status deploy/source-controller --timeout=180s
+          kubectl -n flux-system rollout status deploy/helm-controller --timeout=180s
+
+      - name: Build and load the operator image
+        run: |
+          docker build -t dploy-operator:e2e -f Dockerfile.operator .
+          kind load docker-image dploy-operator:e2e --name dploy-e2e
+
+      - name: Install the CRDs and the operator
+        run: |
+          helm upgrade --install dploy ./charts/dploy \
+            --namespace dploy-system --create-namespace \
+            --set replicaCount=0 \
+            --set operator.image.repository=dploy-operator \
+            --set operator.image.tag=e2e \
+            --set operator.image.pullPolicy=Never \
+            --set auth.jwksURL=https://idp.invalid/jwks \
+            --set auth.jwtIssuer=https://idp.invalid \
+            --wait --timeout 5m
+          kubectl -n dploy-system rollout status deploy/dploy-operator --timeout=180s
+
+      - name: Run the e2e suite
+        run: make test-e2e KUBECONTEXT=kind-dploy-e2e
+
+      - name: Operator logs on failure
+        if: failure()
+        run: |
+          kubectl -n dploy-system logs deploy/dploy-operator --tail=300 || true
+          kubectl get dploytemplates,dployinstances,dployinstanceclaims -A -o wide || true
+          kubectl get helmreleases,helmcharts,gitrepositories -A || true
+
   build:
     name: Build
     runs-on: ubuntu-latest

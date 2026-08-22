@@ -74,10 +74,7 @@ func (r *DployTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	srcReady, srcKnown, srcReason, srcMessage, err := r.syncSource(ctx, &tmpl, eff)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
+	src := r.syncSource(ctx, &tmpl, eff)
 
 	var list dployv1alpha1.DployInstanceList
 	if err := r.List(ctx, &list,
@@ -132,8 +129,7 @@ func (r *DployTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Filling a pool whose chart is known not to resolve only manufactures
 	// environments that can never come up. An unknown verdict is not a refusal:
 	// the members wait, and no HelmRelease is applied until the probe says yes.
-	srcBroken := srcKnown && !srcReady
-	if isPoolActive(&tmpl) && !srcBroken {
+	if isPoolActive(&tmpl) && !src.broken {
 		ttl := resolveInstanceTTL(&tmpl, eff)
 		maxSize := tmpl.Spec.Pool.MaxSize
 		for unclaimedSlots+created < tmpl.Spec.Pool.Size {
@@ -162,14 +158,14 @@ func (r *DployTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	original := tmpl.DeepCopy()
 	sourceStatus := metav1.ConditionFalse
-	if srcReady {
+	if src.ok {
 		sourceStatus = metav1.ConditionTrue
 	}
 	apimeta.SetStatusCondition(&tmpl.Status.Conditions, metav1.Condition{
 		Type:               dployv1alpha1.ConditionSourceReady,
 		Status:             sourceStatus,
-		Reason:             srcReason,
-		Message:            srcMessage,
+		Reason:             src.reason,
+		Message:            src.message,
 		ObservedGeneration: tmpl.Generation,
 	})
 	tmpl.Status.PoolAvailable = availableReady - deletedAvailable
@@ -180,7 +176,7 @@ func (r *DployTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, fmt.Errorf("patch DployTemplate status: %w", err)
 	}
 
-	if isPoolActive(&tmpl) || !srcReady {
+	if isPoolActive(&tmpl) || !src.ok {
 		return ctrl.Result{RequeueAfter: poolMaintenanceInterval}, nil
 	}
 	return ctrl.Result{}, nil
@@ -219,37 +215,28 @@ func (r *DployTemplateReconciler) createPoolInstance(ctx context.Context, tmpl *
 // members left behind by a method switch can never be claimed by anyone and
 // would leak until the template is deleted.
 // syncSource reconciles the template's Flux source and its single chart probe,
-// and reports whether an instance may now safely apply a HelmRelease.
+// and reports what the template now knows about its own chart. Every failure
+// here — a create race, Flux not installed, an API error — is the same answer:
+// nothing is known yet. Saying so and requeueing is safer than guessing, and it
+// is one branch instead of three.
 func (r *DployTemplateReconciler) syncSource(
 	ctx context.Context,
 	tmpl *dployv1alpha1.DployTemplate,
 	eff operatorconfig.Effective,
-) (ready, known bool, reason, message string, err error) {
+) sourceVerdict {
 	if chartRef(tmpl) == "" {
-		return false, true, "ChartNotConfigured", "template has neither chart.path nor chart.chart set", nil
+		return sourceVerdict{broken: true, reason: "ChartNotConfigured",
+			message: "template has neither chart.path nor chart.chart set"}
 	}
 	srcKind, srcName, err := ensureSource(ctx, r.Client, r.Scheme, tmpl, eff)
 	if err != nil {
-		if isCreateRace(err) {
-			return false, false, "SourcePending", "another reconcile is creating the source", nil
-		}
-		if fluxAbsent(err) {
-			return false, false, "FluxUnavailable", "the Flux source CRDs are not installed on this cluster", nil
-		}
-		return false, false, "", "", err
+		return unknownSource("SourcePending", fmt.Sprintf("cannot reconcile the chart source yet: %v", err))
 	}
-	hc, herr := ensureChartProbe(ctx, r.Client, r.Scheme, tmpl, srcKind, srcName, eff)
-	if herr != nil {
-		if isCreateRace(herr) {
-			return false, false, "ChartProbePending", "another reconcile is creating the chart probe", nil
-		}
-		if fluxAbsent(herr) {
-			return false, false, "FluxUnavailable", "the Flux HelmChart CRD is not installed on this cluster", nil
-		}
-		return false, false, "", "", herr
+	hc, err := ensureChartProbe(ctx, r.Client, r.Scheme, tmpl, srcKind, srcName, eff)
+	if err != nil {
+		return unknownSource("ChartProbePending", fmt.Sprintf("cannot reconcile the chart probe yet: %v", err))
 	}
-	ready, known, reason, message = translateChartProbe(hc)
-	return ready, known, reason, message, nil
+	return translateChartProbe(hc)
 }
 
 func desiredWarm(tmpl *dployv1alpha1.DployTemplate) int {

@@ -274,6 +274,7 @@ func (r *DployInstanceReconciler) reconcileDelete(ctx context.Context, inst *dpl
 	}
 	original := inst.DeepCopy()
 	inst.Status.Phase = dployv1alpha1.PhaseExpiring
+	inst.Status.Health = "Progressing"
 
 	name := engineResourceName(inst)
 	var hr helmv2.HelmRelease
@@ -400,6 +401,7 @@ func (r *DployInstanceReconciler) applyTTL(ctx context.Context, original, inst *
 	}
 
 	inst.Status.Phase = dployv1alpha1.PhaseExpiring
+	inst.Status.Health = "Progressing"
 	if err := r.patchStatus(ctx, original, inst); err != nil {
 		return 0, false, err
 	}
@@ -428,6 +430,9 @@ func phaseFor(inst *dployv1alpha1.DployInstance, state helmReleaseState) dployv1
 
 func (r *DployInstanceReconciler) fail(ctx context.Context, original, inst *dployv1alpha1.DployInstance, reason, message string) (ctrl.Result, error) {
 	inst.Status.Phase = dployv1alpha1.PhaseFailed
+	// Health is projected onto the claim and read by the UI. Leaving the last
+	// value behind means a dead environment keeps reporting Healthy.
+	inst.Status.Health = "Degraded"
 	apimeta.SetStatusCondition(&inst.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,

@@ -5,7 +5,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -228,22 +227,6 @@ func ensureSource(ctx context.Context, c client.Client, scheme *runtime.Scheme, 
 	return sourcev1.GitRepositoryKind, name, nil
 }
 
-// fluxAbsent reports whether an error is simply "Flux is not installed here".
-// A cluster without the source CRDs cannot answer the chart question at all,
-// and that is an unknown verdict, not a broken template — envtest runs exactly
-// this way, and so does a cluster where Flux has yet to be deployed.
-func fluxAbsent(err error) bool {
-	// Both predicates type-assert and neither unwraps, while every caller here
-	// wraps with %w for context — so walk the chain rather than testing only
-	// the outermost error.
-	for e := err; e != nil; e = errors.Unwrap(e) {
-		if apimeta.IsNoMatchError(e) || runtime.IsNotRegisteredError(e) {
-			return true
-		}
-	}
-	return false
-}
-
 // templateSourceReady reads the template's verdict on its own chart source.
 func templateSourceReady(tmpl *dployv1alpha1.DployTemplate) (ready bool, reason, message string) {
 	c := apimeta.FindStatusCondition(tmpl.Status.Conditions, dployv1alpha1.ConditionSourceReady)
@@ -294,25 +277,42 @@ func ensureChartProbe(
 // blocks instances: a transient source sync unblocks on its own, and a chart
 // path that does not exist stays blocked with the reason visible on the
 // template, which is where an operator looks.
-func translateChartProbe(hc *sourcev1.HelmChart) (ready, known bool, reason, message string) {
+// sourceVerdict is what the template concluded about its own chart. The third
+// state is the point: "not yet known" must not be read as "broken", because the
+// two lead to different decisions — holding a HelmRelease back costs nothing,
+// refusing to fill a pool on a suspicion does.
+type sourceVerdict struct {
+	ok      bool // the chart reference resolves
+	broken  bool // it definitively does not; false while the answer is unknown
+	reason  string
+	message string
+}
+
+func unknownSource(reason, message string) sourceVerdict {
+	return sourceVerdict{reason: reason, message: message}
+}
+
+// translateChartProbe reads the probe's Ready condition into a verdict.
+func translateChartProbe(hc *sourcev1.HelmChart) sourceVerdict {
 	if hc == nil || hc.Name == "" {
-		return false, false, "ChartProbePending", "chart probe has not been created yet"
+		return unknownSource("ChartProbePending", "chart probe has not been created yet")
 	}
 	cond := apimeta.FindStatusCondition(hc.Status.Conditions, fluxmeta.ReadyCondition)
-	if cond == nil {
-		// No verdict at all: source-controller has not looked yet, or is not
-		// running. Unknown is not the same as broken, and callers act on the
-		// difference — holding a HelmRelease back is cheap, refusing to fill a
-		// pool on a suspicion is not.
-		return false, false, "ChartProbePending", "source-controller has not reconciled the chart probe yet"
+	switch {
+	case cond == nil:
+		return unknownSource("ChartProbePending", "source-controller has not reconciled the chart probe yet")
+	case cond.Status == metav1.ConditionTrue:
+		return sourceVerdict{ok: true,
+			reason:  firstNonEmpty(cond.Reason, "ChartResolved"),
+			message: firstNonEmpty(cond.Message, "chart reference resolves")}
+	case cond.Status == metav1.ConditionUnknown:
+		return unknownSource(firstNonEmpty(cond.Reason, "ChartProbePending"),
+			firstNonEmpty(cond.Message, "chart resolution still in progress"))
+	default:
+		return sourceVerdict{broken: true,
+			reason:  firstNonEmpty(cond.Reason, "ChartNotResolved"),
+			message: firstNonEmpty(cond.Message, "chart reference does not resolve")}
 	}
-	if cond.Status == metav1.ConditionTrue {
-		return true, true, firstNonEmpty(cond.Reason, "ChartResolved"), firstNonEmpty(cond.Message, "chart reference resolves")
-	}
-	if cond.Status == metav1.ConditionUnknown {
-		return false, false, firstNonEmpty(cond.Reason, "ChartProbePending"), firstNonEmpty(cond.Message, "chart resolution still in progress")
-	}
-	return false, true, firstNonEmpty(cond.Reason, "ChartNotResolved"), firstNonEmpty(cond.Message, "chart reference does not resolve")
 }
 
 // ensureHelmRelease reconciles the HelmRelease that installs the chart into the

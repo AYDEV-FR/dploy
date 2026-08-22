@@ -66,10 +66,11 @@ the operator: `TemplateNotFound`, `SourceError`, `HelmReleaseError`, `NamespaceE
 `ValuesTemplateError`, `ValuesYAMLError`, `ConnectionURLTemplateError`,
 `ConnectionMessageTemplateError`, or the template's `SourceReady` reason while the gate holds.
 
-:::caution[`health` is not reset on `Failed` or `Expiring`]
-Both transitions write `phase` and leave `health` untouched, so an instance that was `Healthy`
-before it failed keeps reading `Healthy` while `phase` says `Failed`. The claim mirrors that value,
-so it propagates. Read `phase` and the `Ready` condition; treat `health` as advisory.
+:::note[`health` follows the phase]
+`Failed` sets `health` to `Degraded` and `Expiring` sets it to `Progressing`. This was not always
+true: both transitions used to write `phase` and leave `health` behind, so a dead environment kept
+reading `Healthy` and the claim mirrored that. `phase` and the `Ready` condition remain the
+authoritative pair; `health` is a summary for display.
 :::
 
 ## DployInstanceClaim
@@ -88,18 +89,18 @@ so it propagates. Read `phase` and the `Ready` condition; treat `health` as advi
 |-------|--------------|-----------|
 | `Pending` | accepted, holding nothing — usually waiting on a warm member | no |
 | `Bound` | an instance is bound and owned | no |
-| `Rejected` | unsatisfiable as written | until the spec changes |
+| `Rejected` | unsatisfiable as written, or the bound environment failed | until the spec changes |
 | `Expired` | the TTL ran out and the environment was torn down | yes, fully |
 
 | Condition | Status | Reasons |
 |-----------|--------|---------|
 | `Bound` | `True` | `Bound` |
-| | `False` | `PoolExhausted` (waiting), `QuotaExceeded`, `TemplateAtCapacity`, `TemplateNotFound`, `TemplateDisabled`, `Expired` |
+| | `False` | `PoolExhausted` (waiting), `QuotaExceeded`, `TemplateAtCapacity`, `TemplateNotFound`, `TemplateDisabled`, `InstanceFailed`, `Expired` |
 | `Ready` | mirrors the bound instance's `Ready` | `Provisioning` until the instance reports otherwise; `Expired` at the end |
 
-:::caution[`Bound` has no exit when the instance fails]
-Nothing in the claim controller reacts to `instancePhase: Failed`. A claim whose environment died
-stays `Bound`, keeps pointing at the dead instance, and keeps counting against its owner's quota
-until the TTL expires. The `Ready` condition goes `False`, which is the only signal — so alert on
-that rather than on the phase.
+:::note[A failed environment releases its claim]
+When the bound instance reaches `Failed`, the claim is `Rejected` with reason `InstanceFailed` and
+the instance is released — which frees the owner's quota immediately. The owner re-requests when
+they are ready. Previously the claim stayed `Bound` on the dead instance and held the quota until
+its TTL ran out, with the `Ready` condition as the only signal.
 :::
