@@ -10,7 +10,7 @@ RUN npm run build
 
 # Go build stage — runs on the build host and cross-compiles for the target
 # arch (no QEMU emulation).
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 WORKDIR /app
 RUN apk add --no-cache git
 COPY go.mod go.sum ./
