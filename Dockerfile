@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Frontend build stage — runs on the build host (output is arch-independent).
-FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend
+FROM --platform=$BUILDPLATFORM node:26-alpine AS frontend
 WORKDIR /app/web
 COPY web/package*.json ./
 RUN npm ci
